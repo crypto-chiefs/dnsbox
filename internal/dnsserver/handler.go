@@ -116,8 +116,11 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			}
 
 		case dns.TypeA:
+			domain := os.Getenv("DNSBOX_DOMAIN")
+			ipEnv := os.Getenv("DNSBOX_IP")
+
 			if ip := resolver.ParseIPv4(qName); ip != nil {
-				log.Printf("[dnsbox] A query match: %s -> %s", qName, ip.String())
+				log.Printf("[dnsbox] A query matched by ParseIPv4: %s -> %s", qName, ip.String())
 				msg.Answer = append(msg.Answer, &dns.A{
 					Hdr: dns.RR_Header{
 						Name:   q.Name,
@@ -127,27 +130,26 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 					},
 					A: ip,
 				})
+				break // Уже ответили, дальше не идем
 			}
-			domain := os.Getenv("DNSBOX_DOMAIN")
-			ipEnv := os.Getenv("DNSBOX_IP")
 
-			// Let's try to get a list of peers through DiscoverPeers
 			peers, err := utils.DiscoverPeers()
 			if err != nil || len(peers) == 0 {
-				log.Printf("[dnsbox] Fallback for A query: DiscoverPeers failed (%v), using own IP", err)
+				log.Printf("[dnsbox] DiscoverPeers failed (%v), using fallback IP", err)
 				peers = []string{ipEnv}
 			}
 
-			// Let's match the name nsX.domain and return the IP if it.
 			for i, peerIP := range peers {
 				nsName := fmt.Sprintf("ns%d.%s.", i+1, domain)
-				if qName == nsName {
+				log.Printf("[dnsbox] Comparing A query: %q vs nsName: %q", dns.Fqdn(qName), dns.Fqdn(nsName))
+
+				if dns.Fqdn(qName) == dns.Fqdn(nsName) {
 					ip := net.ParseIP(peerIP)
 					if ip == nil {
-						log.Printf("[dnsbox] Invalid IP returned by DiscoverPeers: %q — skipping", peerIP)
+						log.Printf("[dnsbox] Invalid peer IP: %q — skipping", peerIP)
 						continue
 					}
-					log.Printf("[dnsbox] A query for %s → %s (from peers)", nsName, peerIP)
+					log.Printf("[dnsbox] A query matched peer NS: %s → %s", nsName, ip.String())
 					msg.Answer = append(msg.Answer, &dns.A{
 						Hdr: dns.RR_Header{
 							Name:   nsName,
@@ -160,6 +162,8 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 					break
 				}
 			}
+
+			log.Printf("[dnsbox] A query did not match any known IP: %s", qName)
 
 		case dns.TypeAAAA:
 			if ip := resolver.ParseIPv6(qName); ip != nil {
