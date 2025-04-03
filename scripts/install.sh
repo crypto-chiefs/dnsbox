@@ -1,6 +1,15 @@
 #!/bin/bash
 set -e
 
+# Parse args
+FORCE_RESOLV=0
+for arg in "$@"; do
+  if [[ "$arg" == "--force-resolv" ]]; then
+    FORCE_RESOLV=1
+  fi
+done
+
+# Detect sudo or root
 if [[ $EUID -eq 0 ]]; then
   SUDO=""
 else
@@ -9,15 +18,34 @@ fi
 
 CURRENT_USER=$(logname 2>/dev/null || echo $SUDO_USER || echo $USER)
 
+# Check port 53
 if lsof -i :53 &>/dev/null; then
-  echo -e "\033[0;31m❌ Port 53 is already in use. DNSBox requires port 53 for UDP and TCP.\033[0m"
-  echo ""
-  lsof -i :53 | awk 'NR==1 || /LISTEN/'
-  echo ""
-  echo "🚫 Aborting installation."
-  exit 1
+  if [[ "$FORCE_RESOLV" -eq 1 ]]; then
+    echo -e "\033[1;33m⚠️ Port 53 is in use. Attempting to fix via --force-resolv...\033[0m"
+
+    if systemctl list-units --type=service | grep -q systemd-resolved.service; then
+      echo "🛑 Disabling systemd-resolved..."
+      $SUDO systemctl stop systemd-resolved || true
+      $SUDO systemctl disable systemd-resolved || true
+    else
+      echo "ℹ️ systemd-resolved not found — skipping"
+    fi
+
+    $SUDO rm -f /etc/resolv.conf
+    echo "nameserver 8.8.8.8" | $SUDO tee /etc/resolv.conf
+    echo -e "\033[1;32m✅ fallback DNS set to 8.8.8.8\033[0m"
+  else
+    echo -e "\033[0;31m❌ Port 53 is already in use. DNSBox requires port 53 for UDP and TCP.\033[0m"
+    echo ""
+    lsof -i :53 | awk 'NR==1 || /LISTEN/'
+    echo ""
+    echo "👉 Re-run with \033[1;36m--force-resolv\033[0m to automatically disable systemd-resolved"
+    echo "🚫 Aborting installation."
+    exit 1
+  fi
 fi
 
+# Setup
 REPO="crypto-chiefs/dnsbox"
 SERVICE_NAME="dnsbox"
 ARCHIVE_PREFIX="dnsbox"
