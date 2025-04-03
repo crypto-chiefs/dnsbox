@@ -1,0 +1,32 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+./dnsboxd
+
+# Output / build
+/bin/
+/build/
+/dist/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Go stuff
+*.test
+coverage.out
+
+# IDEs / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Dependency caches (optional)
+vendor/

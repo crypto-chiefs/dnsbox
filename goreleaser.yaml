@@ -1,0 +1,41 @@
+project_name: dnsbox
+
+builds:
+  - id: dnsbox
+    main: ./cmd/dnsboxd/main.go
+    binary: dnsboxd
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    env:
+      - CGO_ENABLED=0
+    goamd64:
+      - v1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - format: tar.gz
+    name_template: '{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}'
+    files:
+      - dnsboxd
+      - systemd/dnsbox.service
+
+release:
+  github:
+    owner: crypto-chiefs
+    name: dnsbox
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "snapshot-{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
