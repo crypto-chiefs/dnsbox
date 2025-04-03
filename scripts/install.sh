@@ -3,11 +3,23 @@ set -e
 
 # Parse args
 FORCE_RESOLV=0
+IP=""
+DOMAIN=""
 for arg in "$@"; do
-  if [[ "$arg" == "--force-resolv" ]]; then
-    FORCE_RESOLV=1
-  fi
+  case $arg in
+    --force-resolv) FORCE_RESOLV=1 ;;
+    --ip=*) IP="${arg#*=}" ;;
+    --domain=*) DOMAIN="${arg#*=}" ;;
+  esac
 done
+
+if [[ -z "$IP" || -z "$DOMAIN" ]]; then
+  echo -e "\033[0;31m❌ Missing --ip or --domain.\033[0m"
+  echo ""
+  echo "👉 Example usage:"
+  echo -e "   \033[1;36mbash <(curl -sSL https://raw.githubusercontent.com/crypto-chiefs/dnsbox/main/scripts/install.sh) --ip=167.172.5.205 --domain=dnsbox.io\033[0m"
+  exit 1
+fi
 
 # Detect sudo or root
 if [[ $EUID -eq 0 ]]; then
@@ -94,6 +106,8 @@ if [[ "$GOOS" == "linux" ]]; then
   $SUDO sed -e "s|{{BIN_PATH}}|$BIN_ABS_PATH|g" \
             -e "s|{{WORKDIR}}|$WORKDIR|g" \
             -e "s|{{USER}}|$CURRENT_USER|g" \
+            -e "s|{{IP}}|$IP|g" \
+            -e "s|{{DOMAIN}}|$DOMAIN|g" \
             "$TMP_UNIT" | $SUDO tee "$SERVICE_FILE" > /dev/null
 
   echo "✅ Unit installed: $SERVICE_FILE"
