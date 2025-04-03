@@ -12,7 +12,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/crypto-chiefs/dnsbox/main/scr
 
 - `--ip` — your public IP address (example: `167.172.5.205`)
 - `--domain` — your domain name that should point to this IP (example: `dnsbox.io`)
-
+- `--ns` — subdomain name for your nameserver (example: `ns3` → full name will be `ns3.dnsbox.io`)
 ### Optional flags
 
 - `--force-resolv` — disables `systemd-resolved` and sets `/etc/resolv.conf` to `nameserver 8.8.8.8`  
@@ -23,7 +23,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/crypto-chiefs/dnsbox/main/scr
 ### Full example:
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/crypto-chiefs/dnsbox/main/scripts/install.sh) --ip=167.172.5.205 --domain=dnsbox.io --force-resolv
+bash <(curl -sSL https://raw.githubusercontent.com/crypto-chiefs/dnsbox/main/scripts/install.sh) --ip=167.172.5.205 --domain=dnsbox.io --ns=ns3 --force-resolv
 ```
 
 ---
