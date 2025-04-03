@@ -45,7 +45,9 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 				log.Printf("[dnsbox] Discovered peers: %v", peers)
 
 				if len(peers) == 0 {
-					log.Printf("[dnsbox] No peers discovered, no NS records will be sent.")
+					log.Printf("[dnsbox] No peers discovered — using fallback to DNSBOX_IP: %s", os.Getenv("DNSBOX_IP"))
+					//Setting a forced peers if NS does not already have a glue record
+					peers = []string{os.Getenv("DNSBOX_IP")}
 				}
 
 				for i, ip := range peers {
