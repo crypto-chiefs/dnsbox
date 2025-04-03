@@ -1,10 +1,8 @@
 package dnsserver
 
 import (
-	"fmt"
 	"github.com/crypto-chiefs/dnsbox/internal/resolver"
 	"github.com/crypto-chiefs/dnsbox/internal/txtstore"
-	"github.com/crypto-chiefs/dnsbox/internal/utils"
 	"github.com/miekg/dns"
 	"log"
 	"net"
@@ -17,87 +15,50 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	msg := new(dns.Msg)
 	msg.SetReply(r)
 
+	domain := os.Getenv("DNSBOX_DOMAIN")
+	ipEnv := os.Getenv("DNSBOX_IP")
+	nsNameRaw := os.Getenv("DNSBOX_NS_NAME")
+	if domain == "" || ipEnv == "" || nsNameRaw == "" {
+		log.Printf("[dnsbox] ❌ Missing env vars: DNSBOX_DOMAIN, DNSBOX_IP, or DNSBOX_NS_NAME")
+		return
+	}
+
+	nsFQDN := dns.Fqdn(nsNameRaw + "." + domain)
+
 	for _, q := range r.Question {
 		qName := strings.ToLower(q.Name)
 		log.Printf("[dnsbox] Received query: %s %s", dns.TypeToString[q.Qtype], qName)
 
 		switch q.Qtype {
 		case dns.TypeNS:
-			domain := os.Getenv("DNSBOX_DOMAIN")
-			log.Printf("[dnsbox] DNSBOX_DOMAIN = %s, fqdn = %s", domain, dns.Fqdn(domain))
-
-			if domain == "" {
-				log.Printf("[dnsbox] DNSBOX_DOMAIN is not set")
-				break
-			}
-
 			if strings.EqualFold(qName, dns.Fqdn(domain)) {
-				log.Printf("[dnsbox] NS query matches domain, generating NS records...")
+				log.Printf("[dnsbox] NS query matches domain, generating NS record for %s", nsFQDN)
 				msg.Authoritative = true
-
-				peers, err := utils.DiscoverPeers()
-				if err != nil {
-					log.Printf("[dnsbox] failed to discover peers: %v", err)
-					//Setting a forced peers if NS does not already have a glue record
-					peers = []string{os.Getenv("DNSBOX_IP")}
-				}
-
-				log.Printf("[dnsbox] Discovered peers: %v", peers)
-
-				if len(peers) == 0 {
-					log.Printf("[dnsbox] No peers discovered — using fallback to DNSBOX_IP: %s", os.Getenv("DNSBOX_IP"))
-					//Setting a forced peers if NS does not already have a glue record
-					peers = []string{os.Getenv("DNSBOX_IP")}
-				}
-
-				for i, ip := range peers {
-					nsName := fmt.Sprintf("ns%d.%s.", i+1, domain)
-					log.Printf("[dnsbox] Adding NS record: %s -> %s", domain, nsName)
-
-					msg.Answer = append(msg.Answer, &dns.NS{
-						Hdr: dns.RR_Header{
-							Name:   dns.Fqdn(domain),
-							Rrtype: dns.TypeNS,
-							Class:  dns.ClassINET,
-							Ttl:    300,
-						},
-						Ns: nsName,
-					})
-
-					msg.Extra = append(msg.Extra, &dns.A{
-						Hdr: dns.RR_Header{
-							Name:   nsName,
-							Rrtype: dns.TypeA,
-							Class:  dns.ClassINET,
-							Ttl:    300,
-						},
-						A: net.ParseIP(ip),
-					})
-				}
+				msg.Answer = append(msg.Answer, &dns.NS{
+					Hdr: dns.RR_Header{
+						Name:   dns.Fqdn(domain),
+						Rrtype: dns.TypeNS,
+						Class:  dns.ClassINET,
+						Ttl:    300,
+					},
+					Ns: nsFQDN,
+				})
+				msg.Extra = append(msg.Extra, &dns.A{
+					Hdr: dns.RR_Header{
+						Name:   nsFQDN,
+						Rrtype: dns.TypeA,
+						Class:  dns.ClassINET,
+						Ttl:    300,
+					},
+					A: net.ParseIP(ipEnv),
+				})
 			} else {
 				log.Printf("[dnsbox] NS query does not match domain: qName=%s ≠ %s", qName, dns.Fqdn(domain))
 			}
 
 		case dns.TypeSOA:
-			domain := os.Getenv("DNSBOX_DOMAIN")
-			if domain == "" {
-				log.Printf("[dnsbox] DNSBOX_DOMAIN is not set")
-				break
-			}
-
 			if strings.EqualFold(qName, dns.Fqdn(domain)) {
 				msg.Authoritative = true
-
-				nsName := "ns1." + domain + "."
-				mailbox := "hostmaster." + domain + "."
-
-				peers, err := utils.DiscoverPeers()
-				if err != nil || len(peers) == 0 {
-					log.Printf("[dnsbox] SOA peer fallback used due to error or empty peer list: %v", err)
-				} else {
-					log.Printf("[dnsbox] SOA using peers, first: %s", peers[0])
-				}
-
 				msg.Answer = append(msg.Answer, &dns.SOA{
 					Hdr: dns.RR_Header{
 						Name:   dns.Fqdn(domain),
@@ -105,8 +66,8 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 						Class:  dns.ClassINET,
 						Ttl:    300,
 					},
-					Ns:      nsName,
-					Mbox:    mailbox,
+					Ns:      nsFQDN,
+					Mbox:    "hostmaster." + domain + ".",
 					Serial:  uint32(time.Now().Unix()),
 					Refresh: 3600,
 					Retry:   600,
@@ -116,11 +77,8 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			}
 
 		case dns.TypeA:
-			domain := os.Getenv("DNSBOX_DOMAIN")
-			ipEnv := os.Getenv("DNSBOX_IP")
-
 			if ip := resolver.ParseIPv4(qName); ip != nil {
-				log.Printf("[dnsbox] A query matched by ParseIPv4: %s -> %s", qName, ip.String())
+				log.Printf("[dnsbox] A query matched ParseIPv4: %s -> %s", qName, ip.String())
 				msg.Answer = append(msg.Answer, &dns.A{
 					Hdr: dns.RR_Header{
 						Name:   q.Name,
@@ -130,40 +88,20 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 					},
 					A: ip,
 				})
-				break // Уже ответили, дальше не идем
+				break
 			}
-
-			peers, err := utils.DiscoverPeers()
-			if err != nil || len(peers) == 0 {
-				log.Printf("[dnsbox] DiscoverPeers failed (%v), using fallback IP", err)
-				peers = []string{ipEnv}
+			if dns.Fqdn(qName) == nsFQDN {
+				log.Printf("[dnsbox] A query matched our NS name: %s -> %s", nsFQDN, ipEnv)
+				msg.Answer = append(msg.Answer, &dns.A{
+					Hdr: dns.RR_Header{
+						Name:   nsFQDN,
+						Rrtype: dns.TypeA,
+						Class:  dns.ClassINET,
+						Ttl:    300,
+					},
+					A: net.ParseIP(ipEnv),
+				})
 			}
-
-			for i, peerIP := range peers {
-				nsName := fmt.Sprintf("ns%d.%s.", i+1, domain)
-				log.Printf("[dnsbox] Comparing A query: %q vs nsName: %q", dns.Fqdn(qName), dns.Fqdn(nsName))
-
-				if dns.Fqdn(qName) == dns.Fqdn(nsName) {
-					ip := net.ParseIP(peerIP)
-					if ip == nil {
-						log.Printf("[dnsbox] Invalid peer IP: %q — skipping", peerIP)
-						continue
-					}
-					log.Printf("[dnsbox] A query matched peer NS: %s → %s", nsName, ip.String())
-					msg.Answer = append(msg.Answer, &dns.A{
-						Hdr: dns.RR_Header{
-							Name:   nsName,
-							Rrtype: dns.TypeA,
-							Class:  dns.ClassINET,
-							Ttl:    300,
-						},
-						A: ip,
-					})
-					break
-				}
-			}
-
-			log.Printf("[dnsbox] A query did not match any known IP: %s", qName)
 
 		case dns.TypeAAAA:
 			if ip := resolver.ParseIPv6(qName); ip != nil {

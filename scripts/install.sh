@@ -5,19 +5,21 @@ set -e
 FORCE_RESOLV=0
 IP=""
 DOMAIN=""
+NS_NAME=""
 for arg in "$@"; do
   case $arg in
     --force-resolv) FORCE_RESOLV=1 ;;
     --ip=*) IP="${arg#*=}" ;;
     --domain=*) DOMAIN="${arg#*=}" ;;
+    --ns=*) NS_NAME="${arg#*=}" ;;
   esac
 done
 
-if [[ -z "$IP" || -z "$DOMAIN" ]]; then
-  echo -e "\033[0;31m❌ Missing --ip or --domain.\033[0m"
+if [[ -z "$IP" || -z "$DOMAIN" || -z "$NS_NAME" ]]; then
+  echo -e "\033[0;31m❌ Missing --ip or --domain or --ns.\033[0m"
   echo ""
   echo "👉 Example usage:"
-  echo -e "   \033[1;36mbash <(curl -sSL https://raw.githubusercontent.com/crypto-chiefs/dnsbox/main/scripts/install.sh) --ip=167.172.5.205 --domain=dnsbox.io\033[0m"
+  echo -e "   \033[1;36mbash <(curl -sSL https://raw.githubusercontent.com/crypto-chiefs/dnsbox/main/scripts/install.sh) --ip=167.172.5.205 --domain=dnsbox.io --ns=ns3\033[0m"
   exit 1
 fi
 
@@ -108,6 +110,7 @@ if [[ "$GOOS" == "linux" ]]; then
             -e "s|{{USER}}|$CURRENT_USER|g" \
             -e "s|{{IP}}|$IP|g" \
             -e "s|{{DOMAIN}}|$DOMAIN|g" \
+            -e "s|{{NS_NAME}}|$NS_NAME|g" \
             "$TMP_UNIT" | $SUDO tee "$SERVICE_FILE" > /dev/null
 
   echo "✅ Unit installed: $SERVICE_FILE"
