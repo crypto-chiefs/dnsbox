@@ -20,7 +20,7 @@ fi
 
 REPO="crypto-chiefs/dnsbox"
 SERVICE_NAME="dnsbox"
-BIN_NAME="dnsboxd"
+BIN_NAME="dnsbox"
 INSTALL_DIR="$HOME/.dnsbox"
 
 UNAME=$(uname | tr '[:upper:]' '[:lower:]')
