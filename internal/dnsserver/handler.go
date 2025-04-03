@@ -38,7 +38,8 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 				peers, err := utils.DiscoverPeers()
 				if err != nil {
 					log.Printf("[dnsbox] failed to discover peers: %v", err)
-					break
+					//Setting a forced peers if NS does not already have a glue record
+					peers = []string{os.Getenv("DNSBOX_IP")}
 				}
 
 				log.Printf("[dnsbox] Discovered peers: %v", peers)
