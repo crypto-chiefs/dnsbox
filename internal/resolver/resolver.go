@@ -9,22 +9,27 @@ func ParseIPv4(qname string) net.IP {
 	qname = strings.TrimSuffix(qname, ".")
 	parts := strings.Split(qname, ".")
 
-	if len(parts) < 3 {
+	if len(parts) < 2 {
 		return nil
 	}
 
-	// example: 1-2-3-4.dnsbox.io
-	ipRaw := parts[0]
-	ip := strings.ReplaceAll(ipRaw, "-", ".")
-
-	parsed := net.ParseIP(ip)
-	if parsed != nil {
-		return parsed.To4()
+	// example: 1-2-3-4.dnsbox.io — DNSBox-syntax
+	if len(parts[0]) > 0 && strings.Count(parts[0], "-") == 3 {
+		ip := strings.ReplaceAll(parts[0], "-", ".")
+		if parsed := net.ParseIP(ip); parsed != nil {
+			return parsed.To4()
+		}
 	}
 
-	// example: 1.2.3.4.dnsbox.io
-	ip = strings.Join(parts[:4], ".")
-	return net.ParseIP(ip).To4()
+	// fallback: example 1.2.3.4.dnsbox.io
+	if len(parts) >= 4 {
+		ip := strings.Join(parts[:4], ".")
+		if parsed := net.ParseIP(ip); parsed != nil {
+			return parsed.To4()
+		}
+	}
+
+	return nil
 }
 
 func ParseIPv6(qname string) net.IP {
