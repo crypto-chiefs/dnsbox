@@ -19,27 +19,37 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 
 	for _, q := range r.Question {
 		qName := strings.ToLower(q.Name)
+		log.Printf("[dnsbox] Received query: %s %s", dns.TypeToString[q.Qtype], qName)
 
 		switch q.Qtype {
 		case dns.TypeNS:
 			domain := os.Getenv("DNSBOX_DOMAIN")
+			log.Printf("[dnsbox] DNSBOX_DOMAIN = %s, fqdn = %s", domain, dns.Fqdn(domain))
+
 			if domain == "" {
-				log.Printf("DNSBOX_DOMAIN is not set")
+				log.Printf("[dnsbox] DNSBOX_DOMAIN is not set")
 				break
 			}
 
-			// Убедимся, что запрос по нужному домену
 			if strings.EqualFold(qName, dns.Fqdn(domain)) {
+				log.Printf("[dnsbox] NS query matches domain, generating NS records...")
 				msg.Authoritative = true
 
 				peers, err := utils.DiscoverPeers()
 				if err != nil {
-					log.Printf("failed to discover peers: %v", err)
+					log.Printf("[dnsbox] failed to discover peers: %v", err)
 					break
+				}
+
+				log.Printf("[dnsbox] Discovered peers: %v", peers)
+
+				if len(peers) == 0 {
+					log.Printf("[dnsbox] No peers discovered, no NS records will be sent.")
 				}
 
 				for i, ip := range peers {
 					nsName := fmt.Sprintf("ns%d.%s.", i+1, domain)
+					log.Printf("[dnsbox] Adding NS record: %s -> %s", domain, nsName)
 
 					msg.Answer = append(msg.Answer, &dns.NS{
 						Hdr: dns.RR_Header{
@@ -61,28 +71,28 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 						A: net.ParseIP(ip),
 					})
 				}
+			} else {
+				log.Printf("[dnsbox] NS query does not match domain: qName=%s ≠ %s", qName, dns.Fqdn(domain))
 			}
 
 		case dns.TypeSOA:
 			domain := os.Getenv("DNSBOX_DOMAIN")
 			if domain == "" {
-				log.Printf("DNSBOX_DOMAIN is not set")
+				log.Printf("[dnsbox] DNSBOX_DOMAIN is not set")
 				break
 			}
 
 			if strings.EqualFold(qName, dns.Fqdn(domain)) {
 				msg.Authoritative = true
 
-				// The first NS is for SOA (if there are no peers— we give an empty stub)
 				nsName := "ns1." + domain + "."
 				mailbox := "hostmaster." + domain + "."
 
-				// Ideally, it's better to get peers and use the first one.
 				peers, err := utils.DiscoverPeers()
 				if err != nil || len(peers) == 0 {
-					log.Printf("failed to get peers for SOA: %v", err)
+					log.Printf("[dnsbox] SOA peer fallback used due to error or empty peer list: %v", err)
 				} else {
-					nsName = "ns1." + domain + "."
+					log.Printf("[dnsbox] SOA using peers, first: %s", peers[0])
 				}
 
 				msg.Answer = append(msg.Answer, &dns.SOA{
@@ -94,7 +104,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 					},
 					Ns:      nsName,
 					Mbox:    mailbox,
-					Serial:  uint32(time.Now().Unix()), // dynamic serial number (can be replaced with a stable hash)
+					Serial:  uint32(time.Now().Unix()),
 					Refresh: 3600,
 					Retry:   600,
 					Expire:  86400,
@@ -104,6 +114,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 
 		case dns.TypeA:
 			if ip := resolver.ParseIPv4(qName); ip != nil {
+				log.Printf("[dnsbox] A query match: %s -> %s", qName, ip.String())
 				msg.Answer = append(msg.Answer, &dns.A{
 					Hdr: dns.RR_Header{
 						Name:   q.Name,
@@ -116,7 +127,8 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			}
 
 		case dns.TypeAAAA:
-			if ip := resolver.ParseIPv6(q.Name); ip != nil {
+			if ip := resolver.ParseIPv6(qName); ip != nil {
+				log.Printf("[dnsbox] AAAA query match: %s -> %s", qName, ip.String())
 				msg.Answer = append(msg.Answer, &dns.AAAA{
 					Hdr: dns.RR_Header{
 						Name:   q.Name,
@@ -130,6 +142,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 
 		case dns.TypeTXT:
 			if value, ok := txtstore.Get(qName); ok {
+				log.Printf("[dnsbox] TXT query match: %s -> %s", qName, value)
 				msg.Answer = append(msg.Answer, &dns.TXT{
 					Hdr: dns.RR_Header{
 						Name:   q.Name,
@@ -144,6 +157,6 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if err := w.WriteMsg(msg); err != nil {
-		log.Printf("failed to write DNS response: %v", err)
+		log.Printf("[dnsbox] failed to write DNS response: %v", err)
 	}
 }
