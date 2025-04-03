@@ -18,9 +18,6 @@ builds:
 archives:
   - format: tar.gz
     name_template: '{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}'
-    files:
-      - dnsboxd
-      - systemd/dnsbox.service
 
 release:
   github:
