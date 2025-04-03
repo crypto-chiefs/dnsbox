@@ -56,6 +56,10 @@ func DiscoverPeers() ([]string, error) {
 		}
 
 		for _, ip := range ips {
+			if net.ParseIP(ip) == nil {
+				log.Printf("[discover] Skipping invalid resolved IP for %s: %q", host, ip)
+				continue
+			}
 			if !seen[ip] {
 				log.Printf("[discover] Resolved %s → %s", host, ip)
 				peers = append(peers, ip)
@@ -65,7 +69,7 @@ func DiscoverPeers() ([]string, error) {
 	}
 
 	if len(peers) == 0 {
-		log.Println("[discover] No peers discovered — returning empty list")
+		log.Println("[discover] No valid peers discovered — returning empty list")
 	} else {
 		log.Printf("[discover] Final peer list: %v", peers)
 	}

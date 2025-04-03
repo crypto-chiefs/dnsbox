@@ -140,6 +140,11 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			for i, peerIP := range peers {
 				nsName := fmt.Sprintf("ns%d.%s.", i+1, domain)
 				if qName == nsName {
+					ip := net.ParseIP(peerIP)
+					if ip == nil {
+						log.Printf("[dnsbox] Invalid IP returned by DiscoverPeers: %q — skipping", peerIP)
+						continue
+					}
 					log.Printf("[dnsbox] A query for %s → %s (from peers)", nsName, peerIP)
 					msg.Answer = append(msg.Answer, &dns.A{
 						Hdr: dns.RR_Header{
@@ -148,7 +153,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 							Class:  dns.ClassINET,
 							Ttl:    300,
 						},
-						A: net.ParseIP(peerIP),
+						A: ip,
 					})
 					break
 				}
