@@ -126,6 +126,33 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 					A: ip,
 				})
 			}
+			domain := os.Getenv("DNSBOX_DOMAIN")
+			ipEnv := os.Getenv("DNSBOX_IP")
+
+			// Let's try to get a list of peers through DiscoverPeers
+			peers, err := utils.DiscoverPeers()
+			if err != nil || len(peers) == 0 {
+				log.Printf("[dnsbox] Fallback for A query: DiscoverPeers failed (%v), using own IP", err)
+				peers = []string{ipEnv}
+			}
+
+			// Let's match the name nsX.domain and return the IP if it.
+			for i, peerIP := range peers {
+				nsName := fmt.Sprintf("ns%d.%s.", i+1, domain)
+				if qName == nsName {
+					log.Printf("[dnsbox] A query for %s → %s (from peers)", nsName, peerIP)
+					msg.Answer = append(msg.Answer, &dns.A{
+						Hdr: dns.RR_Header{
+							Name:   nsName,
+							Rrtype: dns.TypeA,
+							Class:  dns.ClassINET,
+							Ttl:    300,
+						},
+						A: net.ParseIP(peerIP),
+					})
+					break
+				}
+			}
 
 		case dns.TypeAAAA:
 			if ip := resolver.ParseIPv6(qName); ip != nil {
