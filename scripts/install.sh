@@ -20,7 +20,8 @@ fi
 
 REPO="crypto-chiefs/dnsbox"
 SERVICE_NAME="dnsbox"
-BIN_NAME="dnsbox"
+ARCHIVE_PREFIX="dnsbox"
+BIN_NAME="dnsboxd"
 INSTALL_DIR="$HOME/.dnsbox"
 
 UNAME=$(uname | tr '[:upper:]' '[:lower:]')
@@ -38,7 +39,7 @@ case "$UNAME" in
   *) echo "❌ Unsupported OS: $UNAME" && exit 1 ;;
 esac
 
-ARCHIVE_NAME="$BIN_NAME-$GOOS-$ARCH.tar.gz"
+ARCHIVE_NAME="$ARCHIVE_PREFIX-$GOOS-$ARCH.tar.gz"
 RELEASE_URL="https://github.com/$REPO/releases/latest/download/$ARCHIVE_NAME"
 UNIT_URL="https://raw.githubusercontent.com/$REPO/main/systemd/dnsbox.service"
 
