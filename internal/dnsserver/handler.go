@@ -86,7 +86,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 						Class:  dns.ClassINET,
 						Ttl:    60,
 					},
-					A: ip,
+					A: net.ParseIP(ipEnv),
 				})
 				break
 			}
@@ -113,7 +113,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 						Class:  dns.ClassINET,
 						Ttl:    60,
 					},
-					AAAA: ip,
+					AAAA: net.ParseIP(ipEnv),
 				})
 			}
 
