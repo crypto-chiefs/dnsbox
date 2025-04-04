@@ -7,6 +7,8 @@ import (
 
 func Start() error {
 	http.HandleFunc("/acme-challenge", handleACMEChallenge)
-	log.Println("[api] listening on :8080")
-	return http.ListenAndServe(":8080", nil)
+	http.HandleFunc("/.dnsbox/ask-cert", handleAskCert)
+	http.HandleFunc("/.dnsbox/receive-cert", handleReceiveCert)
+	log.Println("[api] listening on :80")
+	return http.ListenAndServe(":80", nil)
 }

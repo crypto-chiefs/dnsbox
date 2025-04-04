@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/crypto-chiefs/dnsbox/internal/api"
 	"github.com/crypto-chiefs/dnsbox/internal/dnsserver"
+	"github.com/crypto-chiefs/dnsbox/internal/httpsproxy"
 	"log"
 )
 
@@ -22,6 +23,13 @@ func main() {
 		err := api.Start()
 		if err != nil {
 			log.Fatalf("API server error: %v", err)
+		}
+	}()
+
+	go func() {
+		err := httpsproxy.Start()
+		if err != nil {
+			log.Fatalf("HTTPS proxy error: %v", err)
 		}
 	}()
 
