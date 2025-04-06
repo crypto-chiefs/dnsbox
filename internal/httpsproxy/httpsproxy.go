@@ -34,10 +34,24 @@ func StoreEncryptedCert(domain string, data []byte) {
 func extractIPFromDomain(host string) string {
 	host = strings.Split(host, ":")[0]
 	parts := strings.Split(host, ".")
+
 	if len(parts) < 5 {
 		return ""
 	}
-	return strings.ReplaceAll(parts[0], "-", ".")
+
+	if strings.Contains(parts[0], "-") {
+		ip := strings.ReplaceAll(parts[0], "-", ".")
+		if net.ParseIP(ip) != nil {
+			return ip
+		}
+	}
+
+	ip := fmt.Sprintf("%s.%s.%s.%s", parts[0], parts[1], parts[2], parts[3])
+	if net.ParseIP(ip) != nil {
+		return ip
+	}
+
+	return ""
 }
 
 func Start() error {
