@@ -21,7 +21,7 @@ import (
 	"golang.org/x/crypto/acme"
 )
 
-var cacheDir = "/etc/dnsbox/certs"
+var cacheDir = "/var/lib/dnsbox/certs"
 
 func IssueCertificate(domain string) (tls.Certificate, error) {
 	ctx := context.Background()
@@ -65,7 +65,6 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 			}
 		}
 	}
-
 	if chal == nil {
 		return tls.Certificate{}, fmt.Errorf("no dns-01 challenge found")
 	}
@@ -97,6 +96,7 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 	txtstore.Delete(dnsName)
 	log.Printf("[letsencrypt] ✅ TXT record deleted for %s", dnsName)
 
+	// Generate CSR
 	csrBytes, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
 		Subject:  pkix.Name{CommonName: domain},
 		DNSNames: []string{domain},
@@ -105,6 +105,7 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 
+	// Create cert
 	certDER, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csrBytes, true)
 	if err != nil {
 		return tls.Certificate{}, err
@@ -117,14 +118,25 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 	}
 	keyPEMBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyPEM})
 
+	// Ensure directory exists
+	log.Printf("[letsencrypt] creating cache dir %s", cacheDir)
 	if err := os.MkdirAll(cacheDir, 0700); err != nil {
+		log.Printf("[letsencrypt] ❌ failed to create dir %s: %v", cacheDir, err)
 		return tls.Certificate{}, err
 	}
 
 	crtPath := filepath.Join(cacheDir, domain+".crt")
 	keyPath := filepath.Join(cacheDir, domain+".key")
-	_ = os.WriteFile(crtPath, certPEM, 0600)
-	_ = os.WriteFile(keyPath, keyPEMBytes, 0600)
+	log.Printf("[letsencrypt] saving cert to %s and key to %s", crtPath, keyPath)
+
+	if err := os.WriteFile(crtPath, certPEM, 0600); err != nil {
+		log.Printf("[letsencrypt] ❌ failed to write cert to %s: %v", crtPath, err)
+		return tls.Certificate{}, err
+	}
+	if err := os.WriteFile(keyPath, keyPEMBytes, 0600); err != nil {
+		log.Printf("[letsencrypt] ❌ failed to write key to %s: %v", keyPath, err)
+		return tls.Certificate{}, err
+	}
 
 	return tls.X509KeyPair(certPEM, keyPEMBytes)
 }
