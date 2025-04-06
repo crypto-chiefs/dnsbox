@@ -6,9 +6,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
+
+var missCache = sync.Map{} // fqdn → time.Time
 
 type entry struct {
 	value     string
@@ -34,18 +37,30 @@ func Get(fqdn string) (string, bool) {
 		return val, true
 	}
 
+	if wasMissRecently(fqdn) {
+		log.Printf("[txtstore] skipping lookup — recent miss for %s", fqdn)
+		return "", false
+	}
+
+	selfIP := os.Getenv("DNSBOX_IP")
+
 	peers, err := utils.DiscoverPeers()
 	if err != nil {
+		markMiss(fqdn)
 		return "", false
 	}
 
 	for _, peer := range peers {
+		if peer == selfIP {
+			continue
+		}
 		if val := queryPeerTXTOverHTTP(peer, fqdn); val != "" {
 			Set(fqdn, val, 30)
 			return val, true
 		}
 	}
 
+	markMiss(fqdn)
 	return "", false
 }
 
@@ -93,4 +108,15 @@ func queryPeerTXTOverHTTP(peer, fqdn string) string {
 	}
 
 	return string(body)
+}
+
+func wasMissRecently(fqdn string) bool {
+	if ts, ok := missCache.Load(fqdn); ok {
+		return time.Since(ts.(time.Time)) < 30*time.Second
+	}
+	return false
+}
+
+func markMiss(fqdn string) {
+	missCache.Store(fqdn, time.Now())
 }
