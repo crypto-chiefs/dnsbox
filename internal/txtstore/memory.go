@@ -3,7 +3,9 @@ package txtstore
 import (
 	"context"
 	"github.com/crypto-chiefs/dnsbox/internal/utils"
+	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -62,16 +64,29 @@ func queryPeerTXT(peer, fqdn string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
+	addr := peer
+	if strings.Contains(peer, ":") {
+		addr = "[" + peer + "]"
+	}
+
 	r := &net.Resolver{
 		PreferGo: true,
 		Dial: func(_ context.Context, _, _ string) (net.Conn, error) {
-			return net.DialTimeout("udp", net.JoinHostPort(peer, "53"), time.Second)
+			return net.DialTimeout("udp", net.JoinHostPort(addr, "53"), time.Second)
 		},
 	}
 
 	txts, err := r.LookupTXT(ctx, fqdn)
-	if err != nil || len(txts) == 0 {
+	if err != nil {
+		log.Printf("[query] TXT lookup failed for %s via %s: %v", fqdn, peer, err)
 		return ""
 	}
+
+	if len(txts) == 0 {
+		log.Printf("[query] No TXT records found for %s via %s", fqdn, peer)
+		return ""
+	}
+
+	log.Printf("[query] Resolved TXT for %s via %s: %s", fqdn, peer, txts[0])
 	return txts[0]
 }
