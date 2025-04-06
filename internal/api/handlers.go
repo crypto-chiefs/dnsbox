@@ -160,7 +160,13 @@ func handleTxtHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	remoteIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		remoteIP = r.RemoteAddr
+	}
+
+	log.Printf("[txt-http] incoming request from %s", remoteIP)
+
 	if !utils.IsAllowedPeer(remoteIP) {
 		log.Printf("[txt-http] blocked request from %s", remoteIP)
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -169,13 +175,16 @@ func handleTxtHTTP(w http.ResponseWriter, r *http.Request) {
 
 	fqdn := strings.TrimPrefix(r.URL.Path, "/.dnsbox/txt/")
 	if fqdn == "" || strings.Contains(fqdn, "..") {
+		log.Printf("[txt-http] bad request fqdn=%s", fqdn)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
 	if val, ok := txtstore.GetLocal(fqdn); ok {
+		log.Printf("[txt-http] served TXT %s => %s", fqdn, val)
 		w.Write([]byte(val))
 	} else {
+		log.Printf("[txt-http] TXT not found: %s", fqdn)
 		http.Error(w, "not found", http.StatusNotFound)
 	}
 }

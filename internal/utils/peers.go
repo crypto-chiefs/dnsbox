@@ -174,14 +174,25 @@ func DiscoverPeers() ([]string, error) {
 	return peers, nil
 }
 
-func IsAllowedPeer(ip string) bool {
-	if _, ok := allowedPeerIPs.Load(ip); ok {
+func IsAllowedPeer(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+
+	log.Printf("[txt-http] checking peer IP: %s", host)
+
+	if _, ok := allowedPeerIPs.Load(host); ok {
+		log.Printf("[txt-http] peer %s is already allowed", host)
 		return true
 	}
+
+	log.Printf("[txt-http] peer %s not in allowed cache, refreshing peers", host)
 
 	peers, err := DiscoverPeers()
 	if err == nil {
 		for _, p := range peers {
+			log.Printf("[txt-http] caching peer %s", p)
 			allowedPeerIPs.Store(p, true)
 		}
 	}
@@ -189,6 +200,12 @@ func IsAllowedPeer(ip string) bool {
 	allowedPeerIPs.Store("127.0.0.1", true)
 	allowedPeerIPs.Store("::1", true)
 
-	_, ok := allowedPeerIPs.Load(ip)
+	_, ok := allowedPeerIPs.Load(host)
+	if ok {
+		log.Printf("[txt-http] peer %s is now allowed", host)
+	} else {
+		log.Printf("[txt-http] peer %s is still not allowed", host)
+	}
+
 	return ok
 }
