@@ -76,10 +76,7 @@ func Start() error {
 
 func fetchCertificate(domain string) (tls.Certificate, error) {
 	if letsencrypt.HasCertificate(domain) {
-		return tls.LoadX509KeyPair(
-			"/etc/dnsbox/certs/"+domain+".crt",
-			"/etc/dnsbox/certs/"+domain+".key",
-		)
+		return letsencrypt.LoadCertificate(domain)
 	}
 
 	priv, pub, err := certshare.GenerateEphemeralKeyPair()

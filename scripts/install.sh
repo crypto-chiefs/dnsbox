@@ -92,6 +92,27 @@ cd "$INSTALL_DIR"
 curl -L "$RELEASE_URL" | tar -xz
 chmod +x "$BIN_NAME"
 
+# Ensure cert storage dir exists with proper permissions
+CERT_DIR="/var/lib/dnsbox/certs"
+
+if [[ -d "$CERT_DIR" ]]; then
+  echo "📁 Found existing cert directory: $CERT_DIR"
+  # Check permissions
+  PERMS=$(stat -c "%a" "$CERT_DIR")
+  OWNER=$(stat -c "%U" "$CERT_DIR")
+  if [[ "$PERMS" != "700" || "$OWNER" != "$CURRENT_USER" ]]; then
+    echo "🔒 Fixing permissions for $CERT_DIR"
+    $SUDO chown -R "$CURRENT_USER:$CURRENT_USER" "$CERT_DIR"
+    $SUDO chmod -R 700 "$CERT_DIR"
+  fi
+else
+  echo "📁 Creating cert directory: $CERT_DIR"
+  $SUDO mkdir -p "$CERT_DIR"
+  $SUDO chown -R "$CURRENT_USER:$CURRENT_USER" "$CERT_DIR"
+  $SUDO chmod -R 700 "$CERT_DIR"
+  echo "✅ Created and secured $CERT_DIR"
+fi
+
 if [[ "$GOOS" == "linux" ]]; then
   echo "⚙️ Setting up systemd..."
 
