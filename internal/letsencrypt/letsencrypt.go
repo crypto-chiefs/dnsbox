@@ -26,14 +26,14 @@ var cacheDir = "/var/lib/dnsbox/certs"
 func IssueCertificate(domain string) (tls.Certificate, error) {
 	ctx := context.Background()
 
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	accountKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
 
 	client := &acme.Client{
 		DirectoryURL: acme.LetsEncryptURL,
-		Key:          key,
+		Key:          accountKey,
 	}
 
 	email := "mailto:admin@" + normalizeDomainForEmail(domain)
@@ -41,6 +41,11 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 	_, err = client.Register(ctx, acct, acme.AcceptTOS)
 	if err != nil && !strings.Contains(err.Error(), "already registered") {
 		return tls.Certificate{}, fmt.Errorf("register failed: %w", err)
+	}
+
+	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
 	}
 
 	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(domain))
@@ -94,11 +99,10 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 	txtstore.Delete(dnsName)
 	log.Printf("[letsencrypt] ✅ TXT record deleted for %s", dnsName)
 
-	// Generate CSR
 	csrBytes, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
 		Subject:  pkix.Name{CommonName: domain},
 		DNSNames: []string{domain},
-	}, key)
+	}, certKey)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
@@ -111,7 +115,7 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 	log.Printf("[letsencrypt] 🔐 cert created for %s (%d bytes)", domain, len(certDER[0]))
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER[0]})
-	keyPEM, err := x509.MarshalPKCS8PrivateKey(key)
+	keyPEM, err := x509.MarshalPKCS8PrivateKey(certKey)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
