@@ -201,21 +201,10 @@ func LoadCertificate(domain string) (tls.Certificate, error) {
 }
 
 func normalizeDomainForEmail(domain string) string {
-	parts := strings.SplitN(domain, ".", 2)
-	if len(parts) != 2 {
-		return domain
+	host := strings.Split(domain, ".")[0]
+	if ip := net.ParseIP(strings.ReplaceAll(host, "-", ".")); ip != nil && ip.To4() != nil {
+		ipParts := strings.Split(ip.String(), ".")
+		return fmt.Sprintf("ip-%s-%s-%s-%s@dnsbox.io", ipParts[0], ipParts[1], ipParts[2], ipParts[3])
 	}
-
-	hostPart := parts[0]
-	suffix := parts[1]
-
-	if ip := net.ParseIP(hostPart); ip != nil && ip.To4() != nil {
-		return strings.ReplaceAll(ip.String(), ".", "-") + "." + suffix
-	}
-
-	if ip := net.ParseIP(strings.ReplaceAll(hostPart, "-", ".")); ip != nil && ip.To4() != nil {
-		return hostPart + "." + suffix
-	}
-
-	return domain
+	return "admin@" + domain
 }
