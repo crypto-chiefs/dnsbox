@@ -36,7 +36,6 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 		Key:          key,
 	}
 
-	// Register account
 	email := "mailto:admin@" + normalizeDomainForEmail(domain)
 	acct := &acme.Account{Contact: []string{email}}
 	_, err = client.Register(ctx, acct, acme.AcceptTOS)
@@ -44,7 +43,6 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 		return tls.Certificate{}, fmt.Errorf("register failed: %w", err)
 	}
 
-	// Start order
 	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(domain))
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("authorize order: %w", err)
@@ -110,6 +108,7 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 	if err != nil {
 		return tls.Certificate{}, err
 	}
+	log.Printf("[letsencrypt] 🔐 cert created for %s (%d bytes)", domain, len(certDER[0]))
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER[0]})
 	keyPEM, err := x509.MarshalPKCS8PrivateKey(key)
@@ -127,16 +126,18 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 
 	crtPath := filepath.Join(cacheDir, domain+".crt")
 	keyPath := filepath.Join(cacheDir, domain+".key")
-	log.Printf("[letsencrypt] saving cert to %s and key to %s", crtPath, keyPath)
 
 	if err := os.WriteFile(crtPath, certPEM, 0600); err != nil {
 		log.Printf("[letsencrypt] ❌ failed to write cert to %s: %v", crtPath, err)
 		return tls.Certificate{}, err
 	}
+	log.Printf("[letsencrypt] ✅ cert saved to %s", crtPath)
+
 	if err := os.WriteFile(keyPath, keyPEMBytes, 0600); err != nil {
 		log.Printf("[letsencrypt] ❌ failed to write key to %s: %v", keyPath, err)
 		return tls.Certificate{}, err
 	}
+	log.Printf("[letsencrypt] ✅ key saved to %s", keyPath)
 
 	return tls.X509KeyPair(certPEM, keyPEMBytes)
 }
