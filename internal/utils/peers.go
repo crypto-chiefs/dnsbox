@@ -2,7 +2,9 @@ package utils
 
 import (
 	"fmt"
+	"github.com/miekg/dns"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"strings"
@@ -16,13 +18,57 @@ var (
 	cacheMutex     sync.Mutex
 )
 
+var rootServers = []string{
+	"a.root-servers.net.",
+	"b.root-servers.net.",
+	"c.root-servers.net.",
+	"d.root-servers.net.",
+	"e.root-servers.net.",
+	"f.root-servers.net.",
+	"g.root-servers.net.",
+	"h.root-servers.net.",
+	"i.root-servers.net.",
+	"j.root-servers.net.",
+	"k.root-servers.net.",
+	"l.root-servers.net.",
+	"m.root-servers.net.",
+}
+
+func pickRootServerIP() (string, error) {
+	rand.Seed(time.Now().UnixNano())
+	for _, name := range shuffled(rootServers) {
+		ips, err := net.LookupIP(name)
+		if err != nil {
+			continue
+		}
+		for _, ip := range ips {
+			addr := ip.String()
+			if ip.To4() == nil {
+				// IPv6
+				addr = fmt.Sprintf("[%s]:53", addr)
+			} else {
+				// IPv4
+				addr = addr + ":53"
+			}
+			return addr, nil
+		}
+	}
+	return "", fmt.Errorf("failed to resolve any root server")
+}
+
+func shuffled(list []string) []string {
+	rand.Seed(time.Now().UnixNano())
+	shuffled := append([]string(nil), list...)
+	rand.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+	return shuffled
+}
+
 func DiscoverPeers() ([]string, error) {
+	log.Println("[discover] DiscoverPeers() called")
+
 	cacheMutex.Lock()
 	defer cacheMutex.Unlock()
 
-	log.Println("[discover] DiscoverPeers() called")
-
-	// Return cache if still valid
 	if time.Now().Before(cacheExpiresAt) && len(peersCache) > 0 {
 		log.Printf("[discover] Using cached peers: %v (expires at %s)", peersCache, cacheExpiresAt.Format(time.RFC3339))
 		return peersCache, nil
@@ -30,54 +76,98 @@ func DiscoverPeers() ([]string, error) {
 
 	domain := os.Getenv("DNSBOX_DOMAIN")
 	if domain == "" {
-		log.Println("[discover] Missing DNSBOX_DOMAIN env variable")
-		return nil, fmt.Errorf("missing DNSBOX_DOMAIN")
+		return nil, fmt.Errorf("missing DNSBOX_DOMAIN env variable")
 	}
 
-	log.Printf("[discover] Resolving NS records for domain: %s", domain)
+	parts := strings.Split(domain, ".")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid domain: %s", domain)
+	}
+	tld := parts[len(parts)-1]
 
-	nsRecords, err := net.LookupNS(domain)
+	rootIP, err := pickRootServerIP()
 	if err != nil {
-		log.Printf("[discover] Error resolving NS records for %s: %v", domain, err)
-		return nil, err
+		return nil, fmt.Errorf("unable to pick root server: %v", err)
+	}
+
+	c := new(dns.Client)
+
+	m1 := new(dns.Msg)
+	m1.SetQuestion(dns.Fqdn(tld), dns.TypeNS)
+	resp1, _, err := c.Exchange(m1, rootIP)
+	if err != nil {
+		return nil, fmt.Errorf("root query failed: %v", err)
+	}
+
+	var tldServers []string
+	for _, rr := range resp1.Ns {
+		if ns, ok := rr.(*dns.NS); ok {
+			tldServers = append(tldServers, strings.TrimSuffix(ns.Ns, "."))
+		}
+	}
+	if len(tldServers) == 0 {
+		return nil, fmt.Errorf("no NS found for TLD .%s", tld)
+	}
+
+	var tldIP string
+	for _, tldHost := range shuffled(tldServers) {
+		ips, err := net.LookupHost(tldHost)
+		if err == nil && len(ips) > 0 {
+			ip := net.ParseIP(ips[0])
+			if ip == nil {
+				return nil, fmt.Errorf("invalid IP for TLD NS: %s", ips[0])
+			}
+			if ip.To4() == nil {
+				tldIP = fmt.Sprintf("[%s]:53", ip.String())
+			} else {
+				tldIP = ip.String() + ":53"
+			}
+			break
+		}
+	}
+	if tldIP == "" {
+		return nil, fmt.Errorf("could not resolve TLD NS IP")
+	}
+
+	m2 := new(dns.Msg)
+	m2.SetQuestion(dns.Fqdn(domain), dns.TypeNS)
+	resp2, _, err := c.Exchange(m2, tldIP)
+	if err != nil {
+		return nil, fmt.Errorf("TLD-level query failed: %v", err)
+	}
+
+	ipMap := make(map[string]bool)
+	for _, rr := range resp2.Extra {
+		if a, ok := rr.(*dns.A); ok {
+			ipMap[a.A.String()] = true
+		}
+	}
+
+	if len(ipMap) == 0 {
+		for _, rr := range resp2.Ns {
+			if ns, ok := rr.(*dns.NS); ok {
+				host := strings.TrimSuffix(ns.Ns, ".")
+				ips, err := net.LookupHost(host)
+				if err == nil {
+					for _, ip := range ips {
+						ipMap[ip] = true
+					}
+				}
+			}
+		}
 	}
 
 	var peers []string
-	seen := make(map[string]bool)
-
-	for _, ns := range nsRecords {
-		host := strings.TrimSuffix(ns.Host, ".")
-		log.Printf("[discover] Found NS: %s", host)
-
-		ips, err := net.LookupHost(host)
-		if err != nil {
-			log.Printf("[discover] Failed to resolve IPs for %s: %v", host, err)
-			continue
-		}
-
-		for _, ip := range ips {
-			if net.ParseIP(ip) == nil {
-				log.Printf("[discover] Skipping invalid resolved IP for %s: %q", host, ip)
-				continue
-			}
-			if !seen[ip] {
-				log.Printf("[discover] Resolved %s → %s", host, ip)
-				peers = append(peers, ip)
-				seen[ip] = true
-			}
-		}
+	for ip := range ipMap {
+		peers = append(peers, ip)
 	}
 
 	if len(peers) == 0 {
-		log.Println("[discover] No valid peers discovered — returning empty list")
-	} else {
-		log.Printf("[discover] Final peer list: %v", peers)
+		return nil, fmt.Errorf("no peers resolved from NS")
 	}
 
-	// Update cache
 	peersCache = peers
 	cacheExpiresAt = time.Now().Add(5 * time.Minute)
-	log.Printf("[discover] Cache updated. Expires at %s", cacheExpiresAt.Format(time.RFC3339))
-
+	log.Printf("[discover] Final peers: %v", peers)
 	return peers, nil
 }
