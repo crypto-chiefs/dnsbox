@@ -8,9 +8,12 @@ import (
 	"github.com/crypto-chiefs/dnsbox/internal/httpsproxy"
 	"github.com/crypto-chiefs/dnsbox/internal/letsencrypt"
 	"github.com/crypto-chiefs/dnsbox/internal/txtstore"
+	"github.com/crypto-chiefs/dnsbox/internal/utils"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 )
 
 type challengeRequest struct {
@@ -148,4 +151,31 @@ func handleReceiveCert(w http.ResponseWriter, r *http.Request) {
 	httpsproxy.StoreEncryptedCert(enc.Domain, body)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok\n"))
+}
+
+// /.dnsbox/txt/%s
+func handleTxtHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	remoteIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if !utils.IsAllowedPeer(remoteIP) {
+		log.Printf("[txt-http] blocked request from %s", remoteIP)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	fqdn := strings.TrimPrefix(r.URL.Path, "/.dnsbox/txt/")
+	if fqdn == "" || strings.Contains(fqdn, "..") {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	if val, ok := txtstore.GetLocal(fqdn); ok {
+		w.Write([]byte(val))
+	} else {
+		http.Error(w, "not found", http.StatusNotFound)
+	}
 }

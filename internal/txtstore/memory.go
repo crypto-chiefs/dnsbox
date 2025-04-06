@@ -1,11 +1,11 @@
 package txtstore
 
 import (
-	"context"
+	"fmt"
 	"github.com/crypto-chiefs/dnsbox/internal/utils"
+	"io"
 	"log"
-	"net"
-	"strings"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -30,22 +30,17 @@ func Set(fqdn, value string, ttlSeconds int) {
 }
 
 func Get(fqdn string) (string, bool) {
-	mu.RLock()
-	e, ok := store[fqdn]
-	mu.RUnlock()
-
-	if ok && time.Now().Before(e.expiresAt) {
-		return e.value, true
+	if val, ok := GetLocal(fqdn); ok {
+		return val, true
 	}
 
-	// Try discover peers via NS
 	peers, err := utils.DiscoverPeers()
 	if err != nil {
 		return "", false
 	}
 
 	for _, peer := range peers {
-		if val := queryPeerTXT(peer, fqdn); val != "" {
+		if val := queryPeerTXTOverHTTP(peer, fqdn); val != "" {
 			Set(fqdn, val, 30)
 			return val, true
 		}
@@ -54,39 +49,48 @@ func Get(fqdn string) (string, bool) {
 	return "", false
 }
 
+func GetLocal(fqdn string) (string, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	e, ok := store[fqdn]
+	if !ok || time.Now().After(e.expiresAt) {
+		return "", false
+	}
+
+	return e.value, true
+}
+
 func Delete(fqdn string) {
 	mu.Lock()
 	defer mu.Unlock()
 	delete(store, fqdn)
 }
 
-func queryPeerTXT(peer, fqdn string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+func queryPeerTXTOverHTTP(peer, fqdn string) string {
+	url := fmt.Sprintf("http://%s/.dnsbox/txt/%s", peer, fqdn)
 
-	addr := peer
-	if strings.Contains(peer, ":") {
-		addr = "[" + peer + "]"
+	client := &http.Client{
+		Timeout: 2 * time.Second, // можно поднять до 3-5 сек при необходимости
 	}
 
-	r := &net.Resolver{
-		PreferGo: true,
-		Dial: func(_ context.Context, _, _ string) (net.Conn, error) {
-			return net.DialTimeout("udp", net.JoinHostPort(addr, "53"), time.Second)
-		},
-	}
-
-	txts, err := r.LookupTXT(ctx, fqdn)
+	resp, err := client.Get(url)
 	if err != nil {
-		log.Printf("[query] TXT lookup failed for %s via %s: %v", fqdn, peer, err)
+		log.Printf("[query] TXT HTTP failed for %s via %s: %v", fqdn, peer, err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[query] TXT HTTP response %d for %s via %s", resp.StatusCode, fqdn, peer)
 		return ""
 	}
 
-	if len(txts) == 0 {
-		log.Printf("[query] No TXT records found for %s via %s", fqdn, peer)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[query] TXT HTTP read failed for %s via %s: %v", fqdn, peer, err)
 		return ""
 	}
 
-	log.Printf("[query] Resolved TXT for %s via %s: %s", fqdn, peer, txts[0])
-	return txts[0]
+	return string(body)
 }

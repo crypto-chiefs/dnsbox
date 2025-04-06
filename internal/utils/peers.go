@@ -34,6 +34,8 @@ var rootServers = []string{
 	"m.root-servers.net.",
 }
 
+var allowedPeerIPs sync.Map
+
 func pickRootServerIP() (string, error) {
 	rand.Seed(time.Now().UnixNano())
 	for _, name := range shuffled(rootServers) {
@@ -170,4 +172,23 @@ func DiscoverPeers() ([]string, error) {
 	cacheExpiresAt = time.Now().Add(5 * time.Minute)
 	log.Printf("[discover] Final peers: %v", peers)
 	return peers, nil
+}
+
+func IsAllowedPeer(ip string) bool {
+	if _, ok := allowedPeerIPs.Load(ip); ok {
+		return true
+	}
+
+	peers, err := DiscoverPeers()
+	if err == nil {
+		for _, p := range peers {
+			allowedPeerIPs.Store(p, true)
+		}
+	}
+
+	allowedPeerIPs.Store("127.0.0.1", true)
+	allowedPeerIPs.Store("::1", true)
+
+	_, ok := allowedPeerIPs.Load(ip)
+	return ok
 }
