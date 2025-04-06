@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,7 +37,8 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 	}
 
 	// Register account
-	acct := &acme.Account{Contact: []string{"mailto:admin@" + domain}}
+	email := "mailto:admin@" + normalizeDomainForEmail(domain)
+	acct := &acme.Account{Contact: []string{email}}
 	_, err = client.Register(ctx, acct, acme.AcceptTOS)
 	if err != nil && !strings.Contains(err.Error(), "already registered") {
 		return tls.Certificate{}, fmt.Errorf("register failed: %w", err)
@@ -179,4 +181,24 @@ func LoadCertificate(domain string) (tls.Certificate, error) {
 	}
 
 	return cert, nil
+}
+
+func normalizeDomainForEmail(domain string) string {
+	parts := strings.SplitN(domain, ".", 2)
+	if len(parts) != 2 {
+		return domain
+	}
+
+	hostPart := parts[0]
+	suffix := parts[1]
+
+	if ip := net.ParseIP(hostPart); ip != nil && ip.To4() != nil {
+		return strings.ReplaceAll(ip.String(), ".", "-") + "." + suffix
+	}
+
+	if ip := net.ParseIP(strings.ReplaceAll(hostPart, "-", ".")); ip != nil && ip.To4() != nil {
+		return hostPart + "." + suffix
+	}
+
+	return domain
 }
