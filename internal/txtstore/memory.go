@@ -24,6 +24,7 @@ var (
 )
 
 func Set(fqdn, value string, ttlSeconds int) {
+	log.Printf("[txtstore] Set(%s) = %s (ttl=%ds)", fqdn, value, ttlSeconds)
 	mu.Lock()
 	defer mu.Unlock()
 	store[fqdn] = entry{
@@ -33,9 +34,11 @@ func Set(fqdn, value string, ttlSeconds int) {
 }
 
 func Get(fqdn string) (string, bool) {
-	if val, ok := GetLocal(fqdn); ok {
+	val, ok := GetLocal(fqdn)
+	if ok {
 		return val, true
 	}
+	log.Printf("[txtstore] GetLocal(%s) → false (val=%s)", fqdn, val)
 
 	if wasMissRecently(fqdn) {
 		log.Printf("[txtstore] skipping lookup — recent miss for %s", fqdn)
@@ -77,6 +80,7 @@ func GetLocal(fqdn string) (string, bool) {
 }
 
 func Delete(fqdn string) {
+	log.Printf("[txtstore] Delete(%s)", fqdn)
 	mu.Lock()
 	defer mu.Unlock()
 	delete(store, fqdn)
