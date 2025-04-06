@@ -8,10 +8,8 @@ import (
 	"github.com/crypto-chiefs/dnsbox/internal/httpsproxy"
 	"github.com/crypto-chiefs/dnsbox/internal/letsencrypt"
 	"github.com/crypto-chiefs/dnsbox/internal/txtstore"
-	"github.com/crypto-chiefs/dnsbox/internal/utils"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 )
@@ -157,19 +155,6 @@ func handleReceiveCert(w http.ResponseWriter, r *http.Request) {
 func handleTxtHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		remoteIP = r.RemoteAddr
-	}
-
-	log.Printf("[txt-http] incoming request from %s", remoteIP)
-
-	if !utils.IsAllowedPeer(remoteIP) {
-		log.Printf("[txt-http] blocked request from %s", remoteIP)
-		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
