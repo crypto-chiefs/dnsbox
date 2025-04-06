@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,6 +25,7 @@ var (
 )
 
 func Set(fqdn, value string, ttlSeconds int) {
+	fqdn = normalizeFQDN(fqdn)
 	log.Printf("[txtstore] Set(%s) = %s (ttl=%ds)", fqdn, value, ttlSeconds)
 	mu.Lock()
 	defer mu.Unlock()
@@ -68,6 +70,7 @@ func Get(fqdn string) (string, bool) {
 }
 
 func GetLocal(fqdn string) (string, bool) {
+	fqdn = normalizeFQDN(fqdn)
 	mu.RLock()
 	defer mu.RUnlock()
 
@@ -80,6 +83,7 @@ func GetLocal(fqdn string) (string, bool) {
 }
 
 func Delete(fqdn string) {
+	fqdn = normalizeFQDN(fqdn)
 	log.Printf("[txtstore] Delete(%s)", fqdn)
 	mu.Lock()
 	defer mu.Unlock()
@@ -123,4 +127,8 @@ func wasMissRecently(fqdn string) bool {
 
 func markMiss(fqdn string) {
 	missCache.Store(fqdn, time.Now())
+}
+
+func normalizeFQDN(fqdn string) string {
+	return strings.TrimSuffix(fqdn, ".")
 }
