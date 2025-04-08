@@ -58,13 +58,22 @@ func Start() error {
 	server := &http.Server{
 		Addr: ":443",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			scheme := "http"
+			if strings.EqualFold(r.Header.Get("Connection"), "Upgrade") &&
+				strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+				if r.TLS != nil {
+					scheme = "ws"
+				} else {
+					scheme = "ws"
+				}
+			}
 			ip := extractIPFromDomain(r.Host)
 			if net.ParseIP(ip) == nil {
 				http.Error(w, "Invalid target", http.StatusBadRequest)
 				return
 			}
 			proxy := httputil.NewSingleHostReverseProxy(&url.URL{
-				Scheme: "http",
+				Scheme: scheme,
 				Host:   ip,
 			})
 			proxy.ServeHTTP(w, r)
