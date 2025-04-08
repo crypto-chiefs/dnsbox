@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/crypto-chiefs/dnsbox/internal/blacklist"
 	"github.com/crypto-chiefs/dnsbox/internal/config"
 	"log"
 	"net"
@@ -72,6 +73,13 @@ func Start() error {
 				http.Error(w, "Invalid target", http.StatusBadRequest)
 				return
 			}
+
+			if blacklist.IsBlocked(ip) {
+				log.Printf("[httpsproxy] ❌ Blocked request to blacklisted IP %s (%s)", ip, r.Host)
+				http.Error(w, "Blocked IP", http.StatusForbidden)
+				return
+			}
+
 			proxy := httputil.NewSingleHostReverseProxy(&url.URL{
 				Scheme: scheme,
 				Host:   ip,

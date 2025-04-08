@@ -1,6 +1,7 @@
 package dnsserver
 
 import (
+	"github.com/crypto-chiefs/dnsbox/internal/blacklist"
 	"github.com/crypto-chiefs/dnsbox/internal/config"
 	"github.com/crypto-chiefs/dnsbox/internal/resolver"
 	"github.com/crypto-chiefs/dnsbox/internal/txtstore"
@@ -109,6 +110,13 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 
 		case dns.TypeA:
 			if ip := resolver.ParseIPv4(qName); ip != nil {
+				ipStr := ip.String()
+
+				if blacklist.IsBlocked(ipStr) {
+					log.Printf("[dnsbox] ❌ Blocked A query: %s → blacklisted %s", qName, ipStr)
+					break
+				}
+
 				log.Printf("[dnsbox] A query matched ParseIPv4: %s -> %s", qName, ip.String())
 				msg.Answer = append(msg.Answer, &dns.A{
 					Hdr: dns.RR_Header{
@@ -122,6 +130,10 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 				break
 			}
 			if dns.Fqdn(qName) == nsFQDN {
+				if blacklist.IsBlocked(ipEnv) {
+					log.Printf("[dnsbox] ❌ Blocked A query for NS %s → blacklisted %s", nsFQDN, ipEnv)
+					break
+				}
 				log.Printf("[dnsbox] A query matched our NS name: %s -> %s", nsFQDN, ipEnv)
 				msg.Answer = append(msg.Answer, &dns.A{
 					Hdr: dns.RR_Header{
