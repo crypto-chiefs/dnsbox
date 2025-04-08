@@ -161,6 +161,95 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 					Txt: []string{value},
 				})
 			}
+
+		case dns.TypeSRV:
+			log.Printf("[dnsbox] SRV query detected for: %s", qName)
+			if strings.HasSuffix(dns.Fqdn(qName), dns.Fqdn(domain)) {
+				peers, err := utils.DiscoverPeers()
+				if err == nil && len(peers) > 0 {
+					for i, peer := range peers {
+						target := dns.Fqdn(peer.Name)
+						msg.Answer = append(msg.Answer, &dns.SRV{
+							Hdr: dns.RR_Header{
+								Name:   qName,
+								Rrtype: dns.TypeSRV,
+								Class:  dns.ClassINET,
+								Ttl:    300,
+							},
+							Priority: uint16(10 + i),
+							Weight:   10,
+							Port:     443,
+							Target:   target,
+						})
+						msg.Extra = append(msg.Extra, &dns.A{
+							Hdr: dns.RR_Header{
+								Name:   target,
+								Rrtype: dns.TypeA,
+								Class:  dns.ClassINET,
+								Ttl:    300,
+							},
+							A: net.ParseIP(peer.IP),
+						})
+					}
+					break
+				}
+			}
+
+			msg.Answer = append(msg.Answer, &dns.SRV{
+				Hdr: dns.RR_Header{
+					Name:   qName,
+					Rrtype: dns.TypeSRV,
+					Class:  dns.ClassINET,
+					Ttl:    300,
+				},
+				Priority: 10,
+				Weight:   10,
+				Port:     443,
+				Target:   dns.Fqdn(domain),
+			})
+			msg.Extra = append(msg.Extra, &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(domain),
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET,
+					Ttl:    300,
+				},
+				A: net.ParseIP(ipEnv),
+			})
+
+		case dns.TypeCNAME:
+			log.Printf("[dnsbox] CNAME query detected for: %s", qName)
+			msg.Answer = append(msg.Answer, &dns.CNAME{
+				Hdr: dns.RR_Header{
+					Name:   qName,
+					Rrtype: dns.TypeCNAME,
+					Class:  dns.ClassINET,
+					Ttl:    300,
+				},
+				Target: dns.Fqdn(domain),
+			})
+
+		case dns.TypeMX:
+			log.Printf("[dnsbox] MX query detected for: %s", qName)
+			msg.Answer = append(msg.Answer, &dns.MX{
+				Hdr: dns.RR_Header{
+					Name:   qName,
+					Rrtype: dns.TypeMX,
+					Class:  dns.ClassINET,
+					Ttl:    300,
+				},
+				Preference: 10,
+				Mx:         "mail." + domain + ".",
+			})
+			msg.Extra = append(msg.Extra, &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   "mail." + domain + ".",
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET,
+					Ttl:    300,
+				},
+				A: net.ParseIP(ipEnv),
+			})
 		}
 	}
 
