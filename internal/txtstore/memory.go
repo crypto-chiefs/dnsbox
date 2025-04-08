@@ -56,10 +56,10 @@ func Get(fqdn string) (string, bool) {
 	}
 
 	for _, peer := range peers {
-		if peer == selfIP {
+		if peer.IP == selfIP {
 			continue
 		}
-		if val := queryPeerTXTOverHTTP(peer, fqdn); val != "" {
+		if val := queryPeerTXTOverHTTP(peer.IP, fqdn); val != "" {
 			Set(fqdn, val, 30)
 			return val, true
 		}

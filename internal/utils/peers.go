@@ -12,8 +12,13 @@ import (
 	"time"
 )
 
+type Peer struct {
+	Name string // FQDN ns1.dnsbox.io.
+	IP   string // IPv4 or IPv6
+}
+
 var (
-	peersCache     []string
+	peersCache     []Peer
 	cacheExpiresAt time.Time
 	cacheMutex     sync.Mutex
 )
@@ -63,7 +68,7 @@ func shuffled(list []string) []string {
 	return shuffled
 }
 
-func DiscoverPeers() ([]string, error) {
+func DiscoverPeers() ([]Peer, error) {
 	log.Println("[discover] DiscoverPeers() called")
 
 	cacheMutex.Lock()
@@ -136,30 +141,41 @@ func DiscoverPeers() ([]string, error) {
 		return nil, fmt.Errorf("TLD-level query failed: %v", err)
 	}
 
-	ipMap := make(map[string]bool)
+	var peers []Peer
+	peerSet := make(map[string]struct{})
+
 	for _, rr := range resp2.Extra {
 		if a, ok := rr.(*dns.A); ok {
-			ipMap[a.A.String()] = true
-		}
-	}
-
-	if len(ipMap) == 0 {
-		for _, rr := range resp2.Ns {
-			if ns, ok := rr.(*dns.NS); ok {
-				host := strings.TrimSuffix(ns.Ns, ".")
-				ips, err := net.LookupHost(host)
-				if err == nil {
-					for _, ip := range ips {
-						ipMap[ip] = true
-					}
-				}
+			name := strings.TrimSuffix(a.Hdr.Name, ".")
+			if _, exists := peerSet[name]; !exists {
+				peers = append(peers, Peer{
+					Name: name,
+					IP:   a.A.String(),
+				})
+				peerSet[name] = struct{}{}
 			}
 		}
 	}
 
-	var peers []string
-	for ip := range ipMap {
-		peers = append(peers, ip)
+	if len(peers) == 0 {
+		for _, rr := range resp2.Ns {
+			if ns, ok := rr.(*dns.NS); ok {
+				name := strings.TrimSuffix(ns.Ns, ".")
+				if _, exists := peerSet[name]; exists {
+					continue
+				}
+				ips, err := net.LookupHost(name)
+				if err == nil {
+					for _, ip := range ips {
+						peers = append(peers, Peer{
+							Name: name,
+							IP:   ip,
+						})
+						peerSet[name] = struct{}{}
+					}
+				}
+			}
+		}
 	}
 
 	if len(peers) == 0 {

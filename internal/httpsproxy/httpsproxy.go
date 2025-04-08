@@ -126,9 +126,9 @@ func fetchCertificate(domain string) (tls.Certificate, error) {
 	for _, peer := range peers {
 		peer := peer
 		go func() {
-			ok, err := certshare.SendAskRequest(peer, req)
+			ok, err := certshare.SendAskRequest(peer.IP, req)
 			if err == nil && ok {
-				log.Printf("[httpsproxy] peer %s has cert", peer)
+				log.Printf("[httpsproxy] peer %s has cert", peer.IP)
 				hasCertChan <- true
 			} else {
 				hasCertChan <- false
