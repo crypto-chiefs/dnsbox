@@ -2,11 +2,11 @@ package txtstore
 
 import (
 	"fmt"
+	"github.com/crypto-chiefs/dnsbox/internal/config"
 	"github.com/crypto-chiefs/dnsbox/internal/utils"
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -47,7 +47,7 @@ func Get(fqdn string) (string, bool) {
 		return "", false
 	}
 
-	selfIP := os.Getenv("DNSBOX_IP")
+	selfIP := config.IP
 
 	peers, err := utils.DiscoverPeers()
 	if err != nil {

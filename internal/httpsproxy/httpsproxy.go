@@ -5,12 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/crypto-chiefs/dnsbox/internal/config"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -157,7 +157,7 @@ func fetchCertificate(domain string) (tls.Certificate, error) {
 }
 
 func getLocalIP() string {
-	if ip := os.Getenv("DNSBOX_IP"); ip != "" {
+	if ip := config.IP; ip != "" {
 		return ip
 	}
 	return "127.0.0.1"

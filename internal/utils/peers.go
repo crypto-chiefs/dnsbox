@@ -2,11 +2,11 @@ package utils
 
 import (
 	"fmt"
+	"github.com/crypto-chiefs/dnsbox/internal/config"
 	"github.com/miekg/dns"
 	"log"
 	"math/rand"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -74,7 +74,7 @@ func DiscoverPeers() ([]string, error) {
 		return peersCache, nil
 	}
 
-	domain := os.Getenv("DNSBOX_DOMAIN")
+	domain := config.Domain
 	if domain == "" {
 		return nil, fmt.Errorf("missing DNSBOX_DOMAIN env variable")
 	}

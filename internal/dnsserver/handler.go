@@ -1,12 +1,12 @@
 package dnsserver
 
 import (
+	"github.com/crypto-chiefs/dnsbox/internal/config"
 	"github.com/crypto-chiefs/dnsbox/internal/resolver"
 	"github.com/crypto-chiefs/dnsbox/internal/txtstore"
 	"github.com/miekg/dns"
 	"log"
 	"net"
-	"os"
 	"strings"
 	"time"
 )
@@ -15,9 +15,9 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	msg := new(dns.Msg)
 	msg.SetReply(r)
 
-	domain := os.Getenv("DNSBOX_DOMAIN")
-	ipEnv := os.Getenv("DNSBOX_IP")
-	nsNameRaw := os.Getenv("DNSBOX_NS_NAME")
+	domain := config.Domain
+	ipEnv := config.IP
+	nsNameRaw := config.NSName
 	if domain == "" || ipEnv == "" || nsNameRaw == "" {
 		log.Printf("[dnsbox] ❌ Missing env vars: DNSBOX_DOMAIN, DNSBOX_IP, or DNSBOX_NS_NAME")
 		return
