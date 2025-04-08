@@ -1,0 +1,18 @@
+# Custom DNS records for dnsbox
+# Format: <name> <type> <value>
+# Supported types: A, CNAME, TXT, MX
+
+# Redirect main domain to GitHub Pages
+dnsbox.io CNAME your.github.io.
+
+# A record pointing to a custom IP (e.g. internal landing page)
+landing.dnsbox.io A 192.168.1.100
+
+# TXT record for verification or plain metadata
+landing.dnsbox.io TXT "Hello world"
+
+# CNAME record for a client domain mapping to external hosting
+client42.dnsbox.io CNAME customer-hosting.net.
+
+# MX record for custom mail server
+dnsbox.io MX mail.custom-mx.com.

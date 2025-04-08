@@ -3,6 +3,7 @@ package dnsserver
 import (
 	"github.com/crypto-chiefs/dnsbox/internal/blacklist"
 	"github.com/crypto-chiefs/dnsbox/internal/config"
+	"github.com/crypto-chiefs/dnsbox/internal/customdns"
 	"github.com/crypto-chiefs/dnsbox/internal/resolver"
 	"github.com/crypto-chiefs/dnsbox/internal/txtstore"
 	"github.com/crypto-chiefs/dnsbox/internal/utils"
@@ -63,8 +64,6 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 				} else {
 					log.Printf("[dnsbox] ❌ Failed to discover peers, falling back to static NS: %s (%s)", nsNameRaw, ipEnv)
 
-					nsFQDN := dns.Fqdn(nsNameRaw + "." + domain)
-
 					msg.Answer = append(msg.Answer, &dns.NS{
 						Hdr: dns.RR_Header{
 							Name:   dns.Fqdn(domain),
@@ -109,6 +108,23 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			}
 
 		case dns.TypeA:
+			matched := customdns.Match(qName, dns.TypeA)
+			if len(matched) > 0 {
+				for _, r := range matched {
+					msg.Answer = append(msg.Answer, &dns.A{
+						Hdr: dns.RR_Header{
+							Name:   dns.Fqdn(r.Name),
+							Rrtype: dns.TypeA,
+							Class:  dns.ClassINET,
+							Ttl:    300,
+						},
+						A: net.ParseIP(r.Data),
+					})
+				}
+				msg.Authoritative = true
+				break
+			}
+
 			if ip := resolver.ParseIPv4(qName); ip != nil {
 				ipStr := ip.String()
 
@@ -129,6 +145,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 				})
 				break
 			}
+
 			if dns.Fqdn(qName) == nsFQDN {
 				if blacklist.IsBlocked(ipEnv) {
 					log.Printf("[dnsbox] ❌ Blocked A query for NS %s → blacklisted %s", nsFQDN, ipEnv)
@@ -144,10 +161,51 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 					},
 					A: net.ParseIP(ipEnv),
 				})
+				break
+			}
+
+			cnames := customdns.Match(qName, dns.TypeCNAME)
+			if len(cnames) > 0 {
+				for _, r := range cnames {
+					msg.Answer = append(msg.Answer, &dns.CNAME{
+						Hdr: dns.RR_Header{
+							Name:   dns.Fqdn(r.Name),
+							Rrtype: dns.TypeCNAME,
+							Class:  dns.ClassINET,
+							Ttl:    300,
+						},
+						Target: dns.Fqdn(r.Data),
+					})
+				}
+				msg.Authoritative = true
 			}
 
 		case dns.TypeAAAA:
+			matched := customdns.Match(qName, dns.TypeAAAA)
+			if len(matched) > 0 {
+				for _, r := range matched {
+					log.Printf("[dnsbox] AAAA query match (custom): %s -> %s", r.Name, r.Data)
+					msg.Answer = append(msg.Answer, &dns.AAAA{
+						Hdr: dns.RR_Header{
+							Name:   dns.Fqdn(r.Name),
+							Rrtype: dns.TypeAAAA,
+							Class:  dns.ClassINET,
+							Ttl:    300,
+						},
+						AAAA: net.ParseIP(r.Data),
+					})
+				}
+				msg.Authoritative = true
+				break
+			}
+
 			if ip := resolver.ParseIPv6(qName); ip != nil {
+				ipStr := ip.String()
+				if blacklist.IsBlocked(ipStr) {
+					log.Printf("[dnsbox] ❌ Blocked AAA query: %s → blacklisted %s", qName, ipStr)
+					break
+				}
+
 				log.Printf("[dnsbox] AAAA query match: %s -> %s", qName, ip.String())
 				msg.Answer = append(msg.Answer, &dns.AAAA{
 					Hdr: dns.RR_Header{
@@ -162,7 +220,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 
 		case dns.TypeTXT:
 			if value, ok := txtstore.Get(qName); ok {
-				log.Printf("[dnsbox] TXT query match: %s -> %s", qName, value)
+				log.Printf("[dnsbox] TXT query match (store): %s -> %s", qName, value)
 				msg.Answer = append(msg.Answer, &dns.TXT{
 					Hdr: dns.RR_Header{
 						Name:   q.Name,
@@ -172,6 +230,25 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 					},
 					Txt: []string{value},
 				})
+				msg.Authoritative = true
+				break
+			}
+
+			matched := customdns.Match(qName, dns.TypeTXT)
+			if len(matched) > 0 {
+				for _, r := range matched {
+					log.Printf("[dnsbox] TXT query match (custom): %s -> %s", r.Name, r.Data)
+					msg.Answer = append(msg.Answer, &dns.TXT{
+						Hdr: dns.RR_Header{
+							Name:   dns.Fqdn(r.Name),
+							Rrtype: dns.TypeTXT,
+							Class:  dns.ClassINET,
+							Ttl:    60,
+						},
+						Txt: []string{r.Data},
+					})
+				}
+				msg.Authoritative = true
 			}
 
 		case dns.TypeSRV:
@@ -230,7 +307,25 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			})
 
 		case dns.TypeCNAME:
-			log.Printf("[dnsbox] CNAME query detected for: %s", qName)
+			matched := customdns.Match(qName, dns.TypeCNAME)
+			if len(matched) > 0 {
+				for _, r := range matched {
+					log.Printf("[dnsbox] CNAME matched from config: %s → %s", r.Name, r.Data)
+					msg.Answer = append(msg.Answer, &dns.CNAME{
+						Hdr: dns.RR_Header{
+							Name:   dns.Fqdn(r.Name),
+							Rrtype: dns.TypeCNAME,
+							Class:  dns.ClassINET,
+							Ttl:    300,
+						},
+						Target: dns.Fqdn(r.Data),
+					})
+				}
+				msg.Authoritative = true
+				break
+			}
+
+			log.Printf("[dnsbox] CNAME query detected for: %s (fallback → %s)", qName, domain)
 			msg.Answer = append(msg.Answer, &dns.CNAME{
 				Hdr: dns.RR_Header{
 					Name:   qName,
@@ -240,9 +335,38 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 				},
 				Target: dns.Fqdn(domain),
 			})
+			msg.Authoritative = true
 
 		case dns.TypeMX:
-			log.Printf("[dnsbox] MX query detected for: %s", qName)
+			matched := customdns.Match(qName, dns.TypeMX)
+			if len(matched) > 0 {
+				for _, r := range matched {
+					log.Printf("[dnsbox] MX query matched (custom): %s → %s", r.Name, r.Data)
+					msg.Answer = append(msg.Answer, &dns.MX{
+						Hdr: dns.RR_Header{
+							Name:   dns.Fqdn(r.Name),
+							Rrtype: dns.TypeMX,
+							Class:  dns.ClassINET,
+							Ttl:    300,
+						},
+						Preference: 10,
+						Mx:         dns.Fqdn(r.Data),
+					})
+					msg.Extra = append(msg.Extra, &dns.A{
+						Hdr: dns.RR_Header{
+							Name:   dns.Fqdn(r.Data),
+							Rrtype: dns.TypeA,
+							Class:  dns.ClassINET,
+							Ttl:    300,
+						},
+						A: net.ParseIP(ipEnv),
+					})
+				}
+				msg.Authoritative = true
+				break
+			}
+
+			log.Printf("[dnsbox] MX query detected for: %s (fallback)", qName)
 			msg.Answer = append(msg.Answer, &dns.MX{
 				Hdr: dns.RR_Header{
 					Name:   qName,
@@ -262,6 +386,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 				},
 				A: net.ParseIP(ipEnv),
 			})
+			msg.Authoritative = true
 		}
 	}
 
