@@ -4,6 +4,7 @@ import (
 	"github.com/crypto-chiefs/dnsbox/internal/config"
 	"github.com/crypto-chiefs/dnsbox/internal/resolver"
 	"github.com/crypto-chiefs/dnsbox/internal/txtstore"
+	"github.com/crypto-chiefs/dnsbox/internal/utils"
 	"github.com/miekg/dns"
 	"log"
 	"net"
@@ -34,24 +35,54 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			if strings.EqualFold(qName, dns.Fqdn(domain)) {
 				log.Printf("[dnsbox] NS query matches domain, generating NS record for %s", nsFQDN)
 				msg.Authoritative = true
-				msg.Answer = append(msg.Answer, &dns.NS{
-					Hdr: dns.RR_Header{
-						Name:   dns.Fqdn(domain),
-						Rrtype: dns.TypeNS,
-						Class:  dns.ClassINET,
-						Ttl:    300,
-					},
-					Ns: nsFQDN,
-				})
-				msg.Extra = append(msg.Extra, &dns.A{
-					Hdr: dns.RR_Header{
-						Name:   nsFQDN,
-						Rrtype: dns.TypeA,
-						Class:  dns.ClassINET,
-						Ttl:    300,
-					},
-					A: net.ParseIP(ipEnv),
-				})
+
+				peers, err := utils.DiscoverPeers()
+				if err == nil && len(peers) > 0 {
+					for _, peer := range peers {
+						nsFqdn := dns.Fqdn(peer.Name)
+						msg.Answer = append(msg.Answer, &dns.NS{
+							Hdr: dns.RR_Header{
+								Name:   dns.Fqdn(domain),
+								Rrtype: dns.TypeNS,
+								Class:  dns.ClassINET,
+								Ttl:    300,
+							},
+							Ns: nsFqdn,
+						})
+						msg.Extra = append(msg.Extra, &dns.A{
+							Hdr: dns.RR_Header{
+								Name:   nsFqdn,
+								Rrtype: dns.TypeA,
+								Class:  dns.ClassINET,
+								Ttl:    300,
+							},
+							A: net.ParseIP(peer.IP),
+						})
+					}
+				} else {
+					log.Printf("[dnsbox] ❌ Failed to discover peers, falling back to static NS: %s (%s)", nsNameRaw, ipEnv)
+
+					nsFQDN := dns.Fqdn(nsNameRaw + "." + domain)
+
+					msg.Answer = append(msg.Answer, &dns.NS{
+						Hdr: dns.RR_Header{
+							Name:   dns.Fqdn(domain),
+							Rrtype: dns.TypeNS,
+							Class:  dns.ClassINET,
+							Ttl:    300,
+						},
+						Ns: nsFQDN,
+					})
+					msg.Extra = append(msg.Extra, &dns.A{
+						Hdr: dns.RR_Header{
+							Name:   nsFQDN,
+							Rrtype: dns.TypeA,
+							Class:  dns.ClassINET,
+							Ttl:    300,
+						},
+						A: net.ParseIP(ipEnv),
+					})
+				}
 			} else {
 				log.Printf("[dnsbox] NS query does not match domain: qName=%s ≠ %s", qName, dns.Fqdn(domain))
 			}
