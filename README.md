@@ -17,6 +17,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/crypto-chiefs/dnsbox/main/scr
 
 - `--force-resolv` — disables `systemd-resolved` and sets `/etc/resolv.conf` to `nameserver 8.8.8.8`  
   Use this if port `53` is already occupied.
+- `--debug` — enables debug-level logging (`DNSBOX_DEBUG=true`) for verbose output and troubleshooting
 
 ---
 
