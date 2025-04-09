@@ -10,7 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"log"
+	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"net"
 	"os"
 	"path/filepath"
@@ -80,24 +80,24 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 	}
 
 	txtstore.Set(dnsName, dnsValue, 60)
-	log.Printf("[letsencrypt] TXT record set for %s => %s", dnsName, dnsValue)
+	logger.Info("[letsencrypt] TXT record set for %s => %s", dnsName, dnsValue)
 
 	_, err = client.Accept(ctx, chal)
 	if err != nil {
 		txtstore.Delete(dnsName)
-		log.Printf("[letsencrypt] ❌ Accept failed — TXT deleted for %s", dnsName)
+		logger.Warn("[letsencrypt] ❌ Accept failed — TXT deleted for %s", dnsName)
 		return tls.Certificate{}, err
 	}
 
 	_, err = client.WaitAuthorization(ctx, authURL)
 	if err != nil {
 		txtstore.Delete(dnsName)
-		log.Printf("[letsencrypt] ❌ Authorization failed — TXT deleted for %s", dnsName)
+		logger.Warn("[letsencrypt] ❌ Authorization failed — TXT deleted for %s", dnsName)
 		return tls.Certificate{}, err
 	}
 
 	txtstore.Delete(dnsName)
-	log.Printf("[letsencrypt] ✅ TXT record deleted for %s", dnsName)
+	logger.Info("[letsencrypt] ✅ TXT record deleted for %s", dnsName)
 
 	csrBytes, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
 		Subject:  pkix.Name{CommonName: domain},
@@ -112,7 +112,7 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	log.Printf("[letsencrypt] 🔐 cert created for %s (%d bytes)", domain, len(certDER[0]))
+	logger.Info("[letsencrypt] 🔐 cert created for %s (%d bytes)", domain, len(certDER[0]))
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER[0]})
 	keyPEM, err := x509.MarshalPKCS8PrivateKey(certKey)
@@ -122,9 +122,9 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 	keyPEMBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyPEM})
 
 	// Ensure directory exists
-	log.Printf("[letsencrypt] creating cache dir %s", cacheDir)
+	logger.Info("[letsencrypt] creating cache dir %s", cacheDir)
 	if err := os.MkdirAll(cacheDir, 0700); err != nil {
-		log.Printf("[letsencrypt] ❌ failed to create dir %s: %v", cacheDir, err)
+		logger.Error("[letsencrypt] ❌ failed to create dir %s: %v", cacheDir, err)
 		return tls.Certificate{}, err
 	}
 
@@ -132,16 +132,16 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 	keyPath := filepath.Join(cacheDir, domain+".key")
 
 	if err := os.WriteFile(crtPath, certPEM, 0600); err != nil {
-		log.Printf("[letsencrypt] ❌ failed to write cert to %s: %v", crtPath, err)
+		logger.Error("[letsencrypt] ❌ failed to write cert to %s: %v", crtPath, err)
 		return tls.Certificate{}, err
 	}
-	log.Printf("[letsencrypt] ✅ cert saved to %s", crtPath)
+	logger.Info("[letsencrypt] ✅ cert saved to %s", crtPath)
 
 	if err := os.WriteFile(keyPath, keyPEMBytes, 0600); err != nil {
-		log.Printf("[letsencrypt] ❌ failed to write key to %s: %v", keyPath, err)
+		logger.Error("[letsencrypt] ❌ failed to write key to %s: %v", keyPath, err)
 		return tls.Certificate{}, err
 	}
-	log.Printf("[letsencrypt] ✅ key saved to %s", keyPath)
+	logger.Info("[letsencrypt] ✅ key saved to %s", keyPath)
 
 	return tls.X509KeyPair(certPEM, keyPEMBytes)
 }
@@ -156,10 +156,10 @@ func HasCertificate(domain string) bool {
 	}
 
 	if !IsCertificateValid(domain) {
-		log.Printf("[letsencrypt] certificate for %s is invalid or expired, reissuing...", domain)
+		logger.Warn("[letsencrypt] certificate for %s is invalid or expired, reissuing...", domain)
 		_, err := IssueCertificate(domain)
 		if err != nil {
-			log.Printf("[letsencrypt] failed to reissue cert for %s: %v", domain, err)
+			logger.Error("[letsencrypt] failed to reissue cert for %s: %v", domain, err)
 			return false
 		}
 	}

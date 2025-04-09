@@ -16,6 +16,7 @@ NoNewPrivileges=true
 Environment=DNSBOX_IP={{IP}}
 Environment=DNSBOX_DOMAIN={{DOMAIN}}
 Environment=DNSBOX_NS_NAME={{NS_NAME}}
+Environment=DNSBOX_DEBUG={{DEBUG_ENV}}
 
 [Install]
 WantedBy=multi-user.target

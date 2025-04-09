@@ -7,9 +7,9 @@ import (
 	"github.com/crypto-chiefs/dnsbox/internal/certshare"
 	"github.com/crypto-chiefs/dnsbox/internal/httpsproxy"
 	"github.com/crypto-chiefs/dnsbox/internal/letsencrypt"
+	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"github.com/crypto-chiefs/dnsbox/internal/txtstore"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 )
@@ -58,29 +58,29 @@ func handleAskCert(w http.ResponseWriter, r *http.Request) {
 
 	var req certshare.AskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("[ask-cert] ❌ invalid JSON: %v", err)
+		logger.Error("[ask-cert] ❌ invalid JSON: %v", err)
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("[ask-cert] received request for domain: %s from %s", req.Domain, req.FromIP)
+	logger.Info("[ask-cert] received request for domain: %s from %s", req.Domain, req.FromIP)
 
 	if req.Domain == "" || req.EphemeralPub == "" || req.Callback == "" {
-		log.Printf("[ask-cert] ❌ missing fields in request")
+		logger.Warn("[ask-cert] ❌ missing fields in request")
 		http.Error(w, "missing fields", http.StatusBadRequest)
 		return
 	}
 
 	// Проверка наличия сертификата
 	if !letsencrypt.HasCertificate(req.Domain) {
-		log.Printf("[ask-cert] ❌ no cert available for %s", req.Domain)
+		logger.Warn("[ask-cert] ❌ no cert available for %s", req.Domain)
 		json.NewEncoder(w).Encode(certshare.AskResponse{HasCert: false})
 		return
 	}
 
 	cert, err := letsencrypt.LoadCertificate(req.Domain)
 	if err != nil {
-		log.Printf("[ask-cert] ❌ failed to load cert for %s: %v", req.Domain, err)
+		logger.Error("[ask-cert] ❌ failed to load cert for %s: %v", req.Domain, err)
 		http.Error(w, "cert load error", http.StatusInternalServerError)
 		return
 	}
@@ -88,30 +88,28 @@ func handleAskCert(w http.ResponseWriter, r *http.Request) {
 	// Парсинг публичного ключа клиента
 	peerPub, err := base64.StdEncoding.DecodeString(req.EphemeralPub)
 	if err != nil || len(peerPub) != 32 {
-		log.Printf("[ask-cert] ❌ invalid ephemeral pub key")
+		logger.Error("[ask-cert] ❌ invalid ephemeral pub key")
 		http.Error(w, "invalid ephemeral pub key", http.StatusBadRequest)
 		return
 	}
 
-	// Генерация ephemeral приватного ключа и вычисление shared key
 	priv, _, err := certshare.GenerateEphemeralKeyPair()
 	if err != nil {
-		log.Printf("[ask-cert] ❌ failed to generate ephemeral keypair: %v", err)
+		logger.Error("[ask-cert] ❌ failed to generate ephemeral keypair: %v", err)
 		http.Error(w, "ephemeral key error", http.StatusInternalServerError)
 		return
 	}
 
 	sharedKey, err := certshare.ComputeSharedKey(peerPub, priv)
 	if err != nil {
-		log.Printf("[ask-cert] ❌ failed to compute shared key: %v", err)
+		logger.Error("[ask-cert] ❌ failed to compute shared key: %v", err)
 		http.Error(w, "shared key error", http.StatusInternalServerError)
 		return
 	}
 
-	// Шифруем сертификат
 	cipher, nonce, err := certshare.EncryptWithSharedKey(cert, sharedKey)
 	if err != nil {
-		log.Printf("[ask-cert] ❌ failed to encrypt cert: %v", err)
+		logger.Error("[ask-cert] ❌ failed to encrypt cert: %v", err)
 		http.Error(w, "encryption error", http.StatusInternalServerError)
 		return
 	}
@@ -127,11 +125,11 @@ func handleAskCert(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		resp, err := http.Post(req.Callback, "application/json", bytes.NewReader(data))
 		if err != nil {
-			log.Printf("[ask-cert] ❌ failed to POST encrypted cert to %s: %v", req.Callback, err)
+			logger.Error("[ask-cert] ❌ failed to POST encrypted cert to %s: %v", req.Callback, err)
 			return
 		}
 		defer resp.Body.Close()
-		log.Printf("[ask-cert] ✅ cert sent to %s, status: %s", req.Callback, resp.Status)
+		logger.Info("[ask-cert] ✅ cert sent to %s, status: %s", req.Callback, resp.Status)
 	}()
 
 	_ = json.NewEncoder(w).Encode(certshare.AskResponse{HasCert: true})
@@ -160,16 +158,16 @@ func handleTxtHTTP(w http.ResponseWriter, r *http.Request) {
 
 	fqdn := strings.TrimPrefix(r.URL.Path, "/.dnsbox/txt/")
 	if fqdn == "" || strings.Contains(fqdn, "..") {
-		log.Printf("[txt-http] bad request fqdn=%s", fqdn)
+		logger.Warn("[txt-http] bad request fqdn=%s", fqdn)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
 	if val, ok := txtstore.GetLocal(fqdn); ok {
-		log.Printf("[txt-http] served TXT %s => %s", fqdn, val)
+		logger.Info("[txt-http] served TXT %s => %s", fqdn, val)
 		w.Write([]byte(val))
 	} else {
-		log.Printf("[txt-http] TXT not found: %s", fqdn)
+		logger.Warn("[txt-http] TXT not found: %s", fqdn)
 		http.Error(w, "not found", http.StatusNotFound)
 	}
 }

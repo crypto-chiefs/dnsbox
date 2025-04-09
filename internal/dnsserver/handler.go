@@ -4,11 +4,11 @@ import (
 	"github.com/crypto-chiefs/dnsbox/internal/blacklist"
 	"github.com/crypto-chiefs/dnsbox/internal/config"
 	"github.com/crypto-chiefs/dnsbox/internal/customdns"
+	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"github.com/crypto-chiefs/dnsbox/internal/resolver"
 	"github.com/crypto-chiefs/dnsbox/internal/txtstore"
 	"github.com/crypto-chiefs/dnsbox/internal/utils"
 	"github.com/miekg/dns"
-	"log"
 	"net"
 	"strings"
 	"time"
@@ -21,21 +21,17 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	domain := config.Domain
 	ipEnv := config.IP
 	nsNameRaw := config.NSName
-	if domain == "" || ipEnv == "" || nsNameRaw == "" {
-		log.Printf("[dnsbox] ❌ Missing env vars: DNSBOX_DOMAIN, DNSBOX_IP, or DNSBOX_NS_NAME")
-		return
-	}
 
 	nsFQDN := dns.Fqdn(nsNameRaw + "." + domain)
 
 	for _, q := range r.Question {
 		qName := strings.ToLower(q.Name)
-		log.Printf("[dnsbox] Received query: %s %s", dns.TypeToString[q.Qtype], qName)
+		logger.Info("[dnsbox] Received query: %s %s", dns.TypeToString[q.Qtype], qName)
 
 		switch q.Qtype {
 		case dns.TypeNS:
 			if strings.EqualFold(qName, dns.Fqdn(domain)) {
-				log.Printf("[dnsbox] NS query matches domain, generating NS record for %s", nsFQDN)
+				logger.Info("[dnsbox] NS query matches domain, generating NS record for %s", nsFQDN)
 				msg.Authoritative = true
 
 				peers, err := utils.DiscoverPeers()
@@ -62,7 +58,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 						})
 					}
 				} else {
-					log.Printf("[dnsbox] ❌ Failed to discover peers, falling back to static NS: %s (%s)", nsNameRaw, ipEnv)
+					logger.Error("[dnsbox] ❌ Failed to discover peers, falling back to static NS: %s (%s)", nsNameRaw, ipEnv)
 
 					msg.Answer = append(msg.Answer, &dns.NS{
 						Hdr: dns.RR_Header{
@@ -84,7 +80,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 					})
 				}
 			} else {
-				log.Printf("[dnsbox] NS query does not match domain: qName=%s ≠ %s", qName, dns.Fqdn(domain))
+				logger.Info("[dnsbox] NS query does not match domain: qName=%s ≠ %s", qName, dns.Fqdn(domain))
 			}
 
 		case dns.TypeSOA:
@@ -129,11 +125,11 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 				ipStr := ip.String()
 
 				if blacklist.IsBlocked(ipStr) {
-					log.Printf("[dnsbox] ❌ Blocked A query: %s → blacklisted %s", qName, ipStr)
+					logger.Warn("[dnsbox] ❌ Blocked A query: %s → blacklisted %s", qName, ipStr)
 					break
 				}
 
-				log.Printf("[dnsbox] A query matched ParseIPv4: %s -> %s", qName, ip.String())
+				logger.Info("[dnsbox] A query matched ParseIPv4: %s -> %s", qName, ip.String())
 				msg.Answer = append(msg.Answer, &dns.A{
 					Hdr: dns.RR_Header{
 						Name:   q.Name,
@@ -148,10 +144,10 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 
 			if dns.Fqdn(qName) == nsFQDN {
 				if blacklist.IsBlocked(ipEnv) {
-					log.Printf("[dnsbox] ❌ Blocked A query for NS %s → blacklisted %s", nsFQDN, ipEnv)
+					logger.Warn("[dnsbox] ❌ Blocked A query for NS %s → blacklisted %s", nsFQDN, ipEnv)
 					break
 				}
-				log.Printf("[dnsbox] A query matched our NS name: %s -> %s", nsFQDN, ipEnv)
+				logger.Info("[dnsbox] A query matched our NS name: %s -> %s", nsFQDN, ipEnv)
 				msg.Answer = append(msg.Answer, &dns.A{
 					Hdr: dns.RR_Header{
 						Name:   nsFQDN,
@@ -184,7 +180,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			matched := customdns.Match(qName, dns.TypeAAAA)
 			if len(matched) > 0 {
 				for _, r := range matched {
-					log.Printf("[dnsbox] AAAA query match (custom): %s -> %s", r.Name, r.Data)
+					logger.Info("[dnsbox] AAAA query match (custom): %s -> %s", r.Name, r.Data)
 					msg.Answer = append(msg.Answer, &dns.AAAA{
 						Hdr: dns.RR_Header{
 							Name:   dns.Fqdn(r.Name),
@@ -202,11 +198,11 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			if ip := resolver.ParseIPv6(qName); ip != nil {
 				ipStr := ip.String()
 				if blacklist.IsBlocked(ipStr) {
-					log.Printf("[dnsbox] ❌ Blocked AAA query: %s → blacklisted %s", qName, ipStr)
+					logger.Warn("[dnsbox] ❌ Blocked AAA query: %s → blacklisted %s", qName, ipStr)
 					break
 				}
 
-				log.Printf("[dnsbox] AAAA query match: %s -> %s", qName, ip.String())
+				logger.Info("[dnsbox] AAAA query match: %s -> %s", qName, ip.String())
 				msg.Answer = append(msg.Answer, &dns.AAAA{
 					Hdr: dns.RR_Header{
 						Name:   q.Name,
@@ -220,7 +216,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 
 		case dns.TypeTXT:
 			if value, ok := txtstore.Get(qName); ok {
-				log.Printf("[dnsbox] TXT query match (store): %s -> %s", qName, value)
+				logger.Info("[dnsbox] TXT query match (store): %s -> %s", qName, value)
 				msg.Answer = append(msg.Answer, &dns.TXT{
 					Hdr: dns.RR_Header{
 						Name:   q.Name,
@@ -237,7 +233,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			matched := customdns.Match(qName, dns.TypeTXT)
 			if len(matched) > 0 {
 				for _, r := range matched {
-					log.Printf("[dnsbox] TXT query match (custom): %s -> %s", r.Name, r.Data)
+					logger.Info("[dnsbox] TXT query match (custom): %s -> %s", r.Name, r.Data)
 					msg.Answer = append(msg.Answer, &dns.TXT{
 						Hdr: dns.RR_Header{
 							Name:   dns.Fqdn(r.Name),
@@ -252,7 +248,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			}
 
 		case dns.TypeSRV:
-			log.Printf("[dnsbox] SRV query detected for: %s", qName)
+			logger.Info("[dnsbox] SRV query detected for: %s", qName)
 			if strings.HasSuffix(dns.Fqdn(qName), dns.Fqdn(domain)) {
 				peers, err := utils.DiscoverPeers()
 				if err == nil && len(peers) > 0 {
@@ -310,7 +306,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			matched := customdns.Match(qName, dns.TypeCNAME)
 			if len(matched) > 0 {
 				for _, r := range matched {
-					log.Printf("[dnsbox] CNAME matched from config: %s → %s", r.Name, r.Data)
+					logger.Info("[dnsbox] CNAME query detected for: %s (fallback → %s)", qName, domain)
 					msg.Answer = append(msg.Answer, &dns.CNAME{
 						Hdr: dns.RR_Header{
 							Name:   dns.Fqdn(r.Name),
@@ -325,7 +321,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 				break
 			}
 
-			log.Printf("[dnsbox] CNAME query detected for: %s (fallback → %s)", qName, domain)
+			logger.Info("[dnsbox] CNAME query detected for: %s (fallback → %s)", qName, domain)
 			msg.Answer = append(msg.Answer, &dns.CNAME{
 				Hdr: dns.RR_Header{
 					Name:   qName,
@@ -341,7 +337,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 			matched := customdns.Match(qName, dns.TypeMX)
 			if len(matched) > 0 {
 				for _, r := range matched {
-					log.Printf("[dnsbox] MX query matched (custom): %s → %s", r.Name, r.Data)
+					logger.Info("[dnsbox] MX query matched (custom): %s → %s", r.Name, r.Data)
 					msg.Answer = append(msg.Answer, &dns.MX{
 						Hdr: dns.RR_Header{
 							Name:   dns.Fqdn(r.Name),
@@ -366,7 +362,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 				break
 			}
 
-			log.Printf("[dnsbox] MX query detected for: %s (fallback)", qName)
+			logger.Info("[dnsbox] MX query detected for: %s (fallback)", qName)
 			msg.Answer = append(msg.Answer, &dns.MX{
 				Hdr: dns.RR_Header{
 					Name:   qName,
@@ -391,6 +387,6 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if err := w.WriteMsg(msg); err != nil {
-		log.Printf("[dnsbox] failed to write DNS response: %v", err)
+		logger.Error("[dnsbox] failed to write DNS response: %v", err)
 	}
 }

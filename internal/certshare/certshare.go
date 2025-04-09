@@ -30,7 +30,7 @@ type EncryptedCert struct {
 	Nonce     string `json:"nonce"`     // base64
 }
 
-// GenerateEphemeralKeyPair создает ephemeral X25519 ключи
+// GenerateEphemeralKeyPair generates ephemeral X25519 key pairs
 func GenerateEphemeralKeyPair() (priv, pub []byte, err error) {
 	priv = make([]byte, 32)
 	_, err = rand.Read(priv)
@@ -41,12 +41,12 @@ func GenerateEphemeralKeyPair() (priv, pub []byte, err error) {
 	return priv, pub, err
 }
 
-// ComputeSharedKey получает shared ключ от peerPub и localPriv
+// ComputeSharedKey derives a shared key from peerPub and localPriv
 func ComputeSharedKey(peerPub, localPriv []byte) ([]byte, error) {
 	return curve25519.X25519(localPriv, peerPub)
 }
 
-// EncryptWithSharedKey шифрует cert + key с shared key
+// EncryptWithSharedKey encrypts the cert and key using the shared key
 func EncryptWithSharedKey(cert tls.Certificate, sharedKey []byte) (ciphertext, nonce []byte, err error) {
 	var certPEM bytes.Buffer
 	for _, b := range cert.Certificate {
@@ -76,7 +76,7 @@ func EncryptWithSharedKey(cert tls.Certificate, sharedKey []byte) (ciphertext, n
 	return ciphertext, nonce, nil
 }
 
-// DecryptCertWithSharedKey расшифровывает cert + key с shared ключом
+// DecryptCertWithSharedKey decrypts the cert and key using the shared key
 func DecryptCertWithSharedKey(ciphertext, nonce, sharedKey []byte) (tls.Certificate, error) {
 	block, err := aes.NewCipher(sharedKey[:32])
 	if err != nil {
@@ -98,7 +98,7 @@ func DecryptCertWithSharedKey(ciphertext, nonce, sharedKey []byte) (tls.Certific
 	return cert, nil
 }
 
-// SendAskRequest отправляет запрос другому пиру и парсит ответ
+// SendAskRequest sends a request to another peer and parses the response
 func SendAskRequest(peerURL string, req AskRequest) (bool, error) {
 	body, _ := json.Marshal(req)
 	resp, err := http.Post(peerURL+"/.dnsbox/ask-cert", "application/json", bytes.NewReader(body))
@@ -116,12 +116,12 @@ func SendAskRequest(peerURL string, req AskRequest) (bool, error) {
 	return result.HasCert, nil
 }
 
-// EncodeEncryptedCert - в JSON для отправки
+// EncodeEncryptedCert encodes the data to JSON for sending
 func EncodeEncryptedCert(enc EncryptedCert) ([]byte, error) {
 	return json.Marshal(enc)
 }
 
-// DecodeEncryptedCert - из JSON в структуру
+// DecodeEncryptedCert decodes JSON into a struct
 func DecodeEncryptedCert(data []byte) (EncryptedCert, error) {
 	var c EncryptedCert
 	err := json.Unmarshal(data, &c)

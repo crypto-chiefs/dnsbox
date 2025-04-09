@@ -3,7 +3,7 @@ package customdns
 import (
 	"bufio"
 	"embed"
-	"log"
+	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"strings"
 	"sync"
 
@@ -28,7 +28,7 @@ func Load() {
 	once.Do(func() {
 		f, err := embedded.Open("custom_domains.txt")
 		if err != nil {
-			log.Printf("[customdns] ❌ Failed to load embedded custom_domains.txt: %v", err)
+			logger.Error("[customdns] ❌ Failed to load embedded custom_domains.txt: %v", err)
 			return
 		}
 		defer f.Close()
@@ -49,7 +49,7 @@ func Load() {
 				Data: strings.Join(parts[2:], " "),
 			})
 		}
-		log.Printf("[customdns] ✅ Loaded %d custom DNS records", len(records))
+		logger.Info("[customdns] ✅ Loaded %d custom DNS records", len(records))
 	})
 }
 

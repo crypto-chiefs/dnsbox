@@ -6,12 +6,15 @@ FORCE_RESOLV=0
 IP=""
 DOMAIN=""
 NS_NAME=""
+DEBUG=0
+
 for arg in "$@"; do
   case $arg in
     --force-resolv) FORCE_RESOLV=1 ;;
     --ip=*) IP="${arg#*=}" ;;
     --domain=*) DOMAIN="${arg#*=}" ;;
     --ns=*) NS_NAME="${arg#*=}" ;;
+    --debug) DEBUG=1 ;;
   esac
 done
 
@@ -97,7 +100,6 @@ CERT_DIR="/var/lib/dnsbox/certs"
 
 if [[ -d "$CERT_DIR" ]]; then
   echo "📁 Found existing cert directory: $CERT_DIR"
-  # Check permissions
   PERMS=$(stat -c "%a" "$CERT_DIR")
   OWNER=$(stat -c "%U" "$CERT_DIR")
   if [[ "$PERMS" != "700" || "$OWNER" != "$CURRENT_USER" ]]; then
@@ -111,6 +113,13 @@ else
   $SUDO chown -R "$CURRENT_USER:$CURRENT_USER" "$CERT_DIR"
   $SUDO chmod -R 700 "$CERT_DIR"
   echo "✅ Created and secured $CERT_DIR"
+fi
+
+# Prepare debug env (default: off)
+DEBUG_ENV_LINE=""
+if [[ "$DEBUG" -eq 1 ]]; then
+  echo "🛠️ Debug mode enabled"
+  DEBUG_ENV_LINE="DNSBOX_DEBUG=true"
 fi
 
 if [[ "$GOOS" == "linux" ]]; then
@@ -132,6 +141,7 @@ if [[ "$GOOS" == "linux" ]]; then
             -e "s|{{IP}}|$IP|g" \
             -e "s|{{DOMAIN}}|$DOMAIN|g" \
             -e "s|{{NS_NAME}}|$NS_NAME|g" \
+            -e "s|{{DEBUG_ENV}}|$DEBUG_ENV_LINE|g" \
             "$TMP_UNIT" | $SUDO tee "$SERVICE_FILE" > /dev/null
 
   echo "✅ Unit installed: $SERVICE_FILE"
@@ -142,7 +152,6 @@ if [[ "$GOOS" == "linux" ]]; then
   $SUDO systemctl restart $SERVICE_NAME
 
   echo "📦 DNSBox started: systemctl status $SERVICE_NAME"
-
 else
   echo "🍎 Manual run: $INSTALL_DIR/$BIN_NAME"
 fi

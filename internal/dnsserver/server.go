@@ -1,8 +1,8 @@
 package dnsserver
 
 import (
+	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"github.com/miekg/dns"
-	"log"
 )
 
 func Start() error {
@@ -10,12 +10,12 @@ func Start() error {
 
 	go func() {
 		if err := dns.ListenAndServe(":53", "udp", nil); err != nil {
-			log.Fatalf("failed to start DNS server (udp): %v", err)
+			logger.Fatal("failed to start DNS server (udp): %v", err)
 		}
 	}()
 
 	if err := dns.ListenAndServe(":53", "tcp", nil); err != nil {
-		log.Fatalf("failed to start DNS server (tcp): %v", err)
+		logger.Fatal("failed to start DNS server (tcp): %v", err)
 	}
 
 	return nil

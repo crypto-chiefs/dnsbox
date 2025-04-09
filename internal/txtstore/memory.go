@@ -3,9 +3,9 @@ package txtstore
 import (
 	"fmt"
 	"github.com/crypto-chiefs/dnsbox/internal/config"
+	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"github.com/crypto-chiefs/dnsbox/internal/utils"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -26,7 +26,7 @@ var (
 
 func Set(fqdn, value string, ttlSeconds int) {
 	fqdn = normalizeFQDN(fqdn)
-	log.Printf("[txtstore] Set(%s) = %s (ttl=%ds)", fqdn, value, ttlSeconds)
+	logger.Info("[txtstore] Set(%s) = %s (ttl=%ds)", fqdn, value, ttlSeconds)
 	mu.Lock()
 	defer mu.Unlock()
 	store[fqdn] = entry{
@@ -40,10 +40,10 @@ func Get(fqdn string) (string, bool) {
 	if ok {
 		return val, true
 	}
-	log.Printf("[txtstore] GetLocal(%s) → false (val=%s)", fqdn, val)
+	logger.Debug("[txtstore] GetLocal(%s) → false (val=%s)", fqdn, val)
 
 	if wasMissRecently(fqdn) {
-		log.Printf("[txtstore] skipping lookup — recent miss for %s", fqdn)
+		logger.Debug("[txtstore] skipping lookup — recent miss for %s", fqdn)
 		return "", false
 	}
 
@@ -84,7 +84,7 @@ func GetLocal(fqdn string) (string, bool) {
 
 func Delete(fqdn string) {
 	fqdn = normalizeFQDN(fqdn)
-	log.Printf("[txtstore] Delete(%s)", fqdn)
+	logger.Info("[txtstore] Delete(%s)", fqdn)
 	mu.Lock()
 	defer mu.Unlock()
 	delete(store, fqdn)
@@ -99,19 +99,19 @@ func queryPeerTXTOverHTTP(peer, fqdn string) string {
 
 	resp, err := client.Get(url)
 	if err != nil {
-		log.Printf("[query] TXT HTTP failed for %s via %s: %v", fqdn, peer, err)
+		logger.Warn("[query] TXT HTTP failed for %s via %s: %v", fqdn, peer, err)
 		return ""
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("[query] TXT HTTP response %d for %s via %s", resp.StatusCode, fqdn, peer)
+		logger.Warn("[query] TXT HTTP response %d for %s via %s", resp.StatusCode, fqdn, peer)
 		return ""
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("[query] TXT HTTP read failed for %s via %s: %v", fqdn, peer, err)
+		logger.Warn("[query] TXT HTTP read failed for %s via %s: %v", fqdn, peer, err)
 		return ""
 	}
 

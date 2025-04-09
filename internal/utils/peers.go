@@ -3,8 +3,8 @@ package utils
 import (
 	"fmt"
 	"github.com/crypto-chiefs/dnsbox/internal/config"
+	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"github.com/miekg/dns"
-	"log"
 	"math/rand"
 	"net"
 	"strings"
@@ -69,13 +69,13 @@ func shuffled(list []string) []string {
 }
 
 func DiscoverPeers() ([]Peer, error) {
-	log.Println("[discover] DiscoverPeers() called")
+	logger.Debug("[discover] DiscoverPeers() called")
 
 	cacheMutex.Lock()
 	defer cacheMutex.Unlock()
 
 	if time.Now().Before(cacheExpiresAt) && len(peersCache) > 0 {
-		log.Printf("[discover] Using cached peers: %v (expires at %s)", peersCache, cacheExpiresAt.Format(time.RFC3339))
+		logger.Debug("[discover] Using cached peers: %v (expires at %s)", peersCache, cacheExpiresAt.Format(time.RFC3339))
 		return peersCache, nil
 	}
 
@@ -184,6 +184,6 @@ func DiscoverPeers() ([]Peer, error) {
 
 	peersCache = peers
 	cacheExpiresAt = time.Now().Add(5 * time.Minute)
-	log.Printf("[discover] Final peers: %v", peers)
+	logger.Info("[discover] Final peers: %v", peers)
 	return peers, nil
 }

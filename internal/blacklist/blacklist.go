@@ -3,7 +3,7 @@ package blacklist
 import (
 	"bufio"
 	"embed"
-	"log"
+	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"net"
 	"strings"
 )
@@ -25,7 +25,7 @@ func LoadEmbedded() {
 
 	file, err := rawBlacklist.Open("blacklist.txt")
 	if err != nil {
-		log.Printf("[blacklist] ❌ Failed to load embedded blacklist: %v", err)
+		logger.Error("[blacklist] ❌ Failed to load embedded blacklist: %v", err)
 		return
 	}
 	defer file.Close()
@@ -54,7 +54,7 @@ func LoadEmbedded() {
 		}
 	}
 
-	log.Printf("[blacklist] ✅ Loaded %d embedded IPs, %d CIDRs", len(exactIPs), len(cidrBlocks))
+	logger.Info("[blacklist] ✅ Loaded %d embedded IPs, %d CIDRs", len(exactIPs), len(cidrBlocks))
 }
 
 func IsBlocked(ipStr string) bool {

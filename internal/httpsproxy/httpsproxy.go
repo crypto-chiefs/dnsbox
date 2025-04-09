@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"github.com/crypto-chiefs/dnsbox/internal/blacklist"
 	"github.com/crypto-chiefs/dnsbox/internal/config"
-	"log"
+	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -75,7 +75,7 @@ func Start() error {
 			}
 
 			if blacklist.IsBlocked(ip) {
-				log.Printf("[httpsproxy] ❌ Blocked request to blacklisted IP %s (%s)", ip, r.Host)
+				logger.Warn("[httpsproxy] ❌ Blocked request to blacklisted IP %s (%s)", ip, r.Host)
 				http.Error(w, "Blocked IP", http.StatusForbidden)
 				return
 			}
@@ -91,7 +91,7 @@ func Start() error {
 				domain := chi.ServerName
 				cert, err := fetchCertificate(domain)
 				if err != nil {
-					log.Printf("[httpsproxy] failed to fetch cert for %s: %v", domain, err)
+					logger.Error("[httpsproxy] failed to fetch cert for %s: %v", domain, err)
 					return nil, err
 				}
 				return &cert, nil
@@ -101,7 +101,7 @@ func Start() error {
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
-	fmt.Println("[httpsproxy] listening on :443")
+	logger.Info("[httpsproxy] listening on :443")
 	return server.ListenAndServeTLS("", "")
 }
 
@@ -116,7 +116,7 @@ func fetchCertificate(domain string) (tls.Certificate, error) {
 	}
 
 	pubB64 := base64.StdEncoding.EncodeToString(pub)
-	callback := "http://" + getLocalIP() + ":80/.dnsbox/receive-cert"
+	callback := "http://" + config.IP + ":80/.dnsbox/receive-cert"
 
 	peers, err := utils.DiscoverPeers()
 	if err != nil {
@@ -125,7 +125,7 @@ func fetchCertificate(domain string) (tls.Certificate, error) {
 
 	req := certshare.AskRequest{
 		Domain:       domain,
-		FromIP:       getLocalIP(),
+		FromIP:       config.IP,
 		EphemeralPub: pubB64,
 		Callback:     callback,
 	}
@@ -136,7 +136,7 @@ func fetchCertificate(domain string) (tls.Certificate, error) {
 		go func() {
 			ok, err := certshare.SendAskRequest(peer.IP, req)
 			if err == nil && ok {
-				log.Printf("[httpsproxy] peer %s has cert", peer.IP)
+				logger.Info("[httpsproxy] peer %s has cert", peer.IP)
 				hasCertChan <- true
 			} else {
 				hasCertChan <- false
@@ -156,19 +156,12 @@ func fetchCertificate(domain string) (tls.Certificate, error) {
 		if err == nil {
 			return cert, nil
 		}
-		log.Printf("[httpsproxy] peer had cert but delivery failed: %v", err)
+		logger.Error("[httpsproxy] peer had cert but delivery failed: %v", err)
 	} else {
-		log.Printf("[httpsproxy] no peer has cert, generating via Let's Encrypt")
+		logger.Info("[httpsproxy] no peer has cert, generating via Let's Encrypt")
 	}
 
 	return letsencrypt.IssueCertificate(domain)
-}
-
-func getLocalIP() string {
-	if ip := config.IP; ip != "" {
-		return ip
-	}
-	return "127.0.0.1"
 }
 
 func waitForCertificate(domain string, priv []byte, timeout time.Duration) (tls.Certificate, error) {
