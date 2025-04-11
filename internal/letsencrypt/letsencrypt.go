@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"github.com/crypto-chiefs/dnsbox/internal/config"
 	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"net"
 	"os"
@@ -36,7 +37,7 @@ func IssueCertificate(domain string) (tls.Certificate, error) {
 		Key:          accountKey,
 	}
 
-	email := "mailto:admin@" + normalizeDomainForEmail(domain)
+	email := "mailto:" + normalizeDomainForEmail(domain) + "@" + config.Domain
 	acct := &acme.Account{Contact: []string{email}}
 	_, err = client.Register(ctx, acct, acme.AcceptTOS)
 	if err != nil && !strings.Contains(err.Error(), "already registered") {
@@ -202,9 +203,16 @@ func LoadCertificate(domain string) (tls.Certificate, error) {
 
 func normalizeDomainForEmail(domain string) string {
 	host := strings.Split(domain, ".")[0]
-	if ip := net.ParseIP(strings.ReplaceAll(host, "-", ".")); ip != nil && ip.To4() != nil {
-		ipParts := strings.Split(ip.String(), ".")
-		return fmt.Sprintf("ip-%s-%s-%s-%s@dnsbox.io", ipParts[0], ipParts[1], ipParts[2], ipParts[3])
+	ipStr := strings.ReplaceAll(host, "-", ":")
+
+	if ip := net.ParseIP(ipStr); ip != nil {
+		if ip4 := ip.To4(); ip4 != nil {
+			return fmt.Sprintf("ip-%s-%s-%s-%s", ip4[0], ip4[1], ip4[2], ip4[3])
+		}
+		clean := strings.ReplaceAll(ip.String(), ":", "-")
+		return "ipv6-" + clean
 	}
-	return "admin@" + domain
+
+	clean := strings.ReplaceAll(domain, ".", "-")
+	return "domain-" + clean
 }
