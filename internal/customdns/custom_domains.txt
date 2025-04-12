@@ -1,1 +1,2 @@
 dnsbox.io CNAME dnsbox-site-server-j4bmt.ondigitalocean.app.
+dnsbox.io TXT "google-site-verification=kyP3BRIqZNmlp9kkYiZw6Zk9h4wZ0BeLH-H7RZOJjt8"
