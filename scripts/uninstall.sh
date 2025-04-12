@@ -57,5 +57,10 @@ $SUDO systemctl restart systemd-journald
 $SUDO rm -rf /run/log/journal/*
 echo "✅ Journald restarted and cache cleared."
 
+# Extra cleanup: release deleted-but-open files (e.g., syslog)
+echo "♻️ Restarting rsyslog to release deleted log files..."
+$SUDO systemctl restart rsyslog
+echo "✅ rsyslog restarted."
+
 # Final message
 echo -e "\033[1;32m✅ DNSBox has been fully uninstalled. All related logs and cache have been cleaned.\033[0m"
