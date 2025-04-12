@@ -121,6 +121,23 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 				break
 			}
 
+			cnames := customdns.Match(qName, dns.TypeCNAME)
+			if len(cnames) > 0 {
+				for _, r := range cnames {
+					msg.Answer = append(msg.Answer, &dns.CNAME{
+						Hdr: dns.RR_Header{
+							Name:   dns.Fqdn(r.Name),
+							Rrtype: dns.TypeCNAME,
+							Class:  dns.ClassINET,
+							Ttl:    300,
+						},
+						Target: dns.Fqdn(r.Data),
+					})
+				}
+				msg.Authoritative = true
+				break
+			}
+
 			if ip := resolver.ParseIPv4(qName); ip != nil {
 				ipStr := ip.String()
 
@@ -158,22 +175,6 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 					A: net.ParseIP(ipEnv),
 				})
 				break
-			}
-
-			cnames := customdns.Match(qName, dns.TypeCNAME)
-			if len(cnames) > 0 {
-				for _, r := range cnames {
-					msg.Answer = append(msg.Answer, &dns.CNAME{
-						Hdr: dns.RR_Header{
-							Name:   dns.Fqdn(r.Name),
-							Rrtype: dns.TypeCNAME,
-							Class:  dns.ClassINET,
-							Ttl:    300,
-						},
-						Target: dns.Fqdn(r.Data),
-					})
-				}
-				msg.Authoritative = true
 			}
 
 		case dns.TypeAAAA:

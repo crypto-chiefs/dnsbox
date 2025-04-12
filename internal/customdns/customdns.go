@@ -56,10 +56,10 @@ func Load() {
 func Match(name string, qtype uint16) []Record {
 	Load()
 	var matched []Record
-	name = strings.ToLower(name)
+	name = dns.Fqdn(strings.ToLower(name))
 
 	for _, r := range records {
-		if r.Name != name {
+		if dns.Fqdn(strings.ToLower(r.Name)) != name {
 			continue
 		}
 
