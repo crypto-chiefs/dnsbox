@@ -1,0 +1,1 @@
+dnsbox.io CNAME dnsbox-site-r9k2a.ondigitalocean.app.
