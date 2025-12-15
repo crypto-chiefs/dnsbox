@@ -103,11 +103,24 @@ This project is licensed under the MIT License. Use it freely, fork it, extend i
 
 ---
 
+## 🧪 Testing
+
+DNSBox includes comprehensive unit tests. See [TESTING.md](TESTING.md) for details.
+
+```bash
+# Run all tests
+make test
+
+# Run tests with coverage
+make test-coverage
+```
+
 ## 🔗 Useful Links
 
 - 🌍 Project website: https://dnsbox.io/
 - 📦 Installer: [install.sh](https://github.com/crypto-chiefs/dnsbox/blob/main/scripts/install.sh)
 - 📖 Documentation: in progress
+- 🧪 Testing Guide: [TESTING.md](TESTING.md)
 
 ---
 

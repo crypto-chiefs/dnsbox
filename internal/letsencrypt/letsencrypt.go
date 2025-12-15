@@ -10,13 +10,14 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"github.com/crypto-chiefs/dnsbox/internal/config"
-	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/crypto-chiefs/dnsbox/internal/config"
+	"github.com/crypto-chiefs/dnsbox/internal/logger"
 
 	"github.com/crypto-chiefs/dnsbox/internal/txtstore"
 	"golang.org/x/crypto/acme"
@@ -207,7 +208,7 @@ func normalizeDomainForEmail(domain string) string {
 
 	if ip := net.ParseIP(ipStr); ip != nil {
 		if ip4 := ip.To4(); ip4 != nil {
-			return fmt.Sprintf("ip-%s-%s-%s-%s", ip4[0], ip4[1], ip4[2], ip4[3])
+			return fmt.Sprintf("ip-%d-%d-%d-%d", ip4[0], ip4[1], ip4[2], ip4[3])
 		}
 		clean := strings.ReplaceAll(ip.String(), ":", "-")
 		return "ipv6-" + clean
