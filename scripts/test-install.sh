@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 printf '%s\n' "$URL" >> "$DNSBOX_TEST_URLS"
-[[ "$URL" = https://github.com/crypto-chiefs/dnsbox/releases/download/v0.5.0/* ]]
+[[ "$URL" = https://github.com/crypto-chiefs/dnsbox/releases/download/v0.5.1/* ]]
 cp "$DNSBOX_TEST_RELEASE/${URL##*/}" "$OUT"
 EOF
 chmod +x "$TEST_DIR/bin/curl"

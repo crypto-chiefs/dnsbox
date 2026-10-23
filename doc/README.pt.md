@@ -1,12 +1,97 @@
-# DNSBox
+# DNSBox — DNS e HTTPS auto-hospedados para nomes de host baseados em IP
 
-O DNSBox combina um servidor DNS autoritativo com um proxy reverso HTTPS. Nomes como `192-168-1-50.home.arpa` codificam o IP do backend; o DNS aponta para o proxy DNSBox.
+[English](../README.md) · [Implantação e redes privadas](deployment.md) · [Configuração](configuration.md) · [Notas de atualização](migration-v0.5.md)
 
-- `--tls-mode=local`: rede privada sem Internet ou encaminhamento de portas. Os clientes precisam confiar na CA local.
-- `--tls-mode=acme`: certificados para nomes de uma zona DNS sob seu controle; exige DNS público por UDP e TCP 53. DNS-01 não exige a porta 80 de entrada.
-- Backends privados exigem uma lista explícita `--allowed-cidrs`.
-- O certificado identifica o nome DNS, não o IP isolado. Instalar o DNSBox não concede controle sobre `dnsbox.io`.
+O DNSBox combina um servidor DNS autoritativo com um proxy reverso HTTPS. Um nome de host como `192-168-1-50.home.arpa` identifica o IP de um backend. As respostas DNS apontam para **o proxy DNSBox**, que termina a conexão TLS e encaminha HTTP para esse backend. Há suporte a IPv4 com pontos ou hífens, IPv6 com hífens, atualização de conexões para WebSocket e armazenamento persistente de certificados.
 
-As instruções anteriores foram substituídas para a v0.5. A documentação completa e atual está em inglês:
+Estão disponíveis dois modos TLS:
 
-[Guia](../README.md) · [Redes privadas e NAT](deployment.md) · [Configuração](configuration.md) · [Migração](migration-v0.5.md)
+- **`acme`**: certificados para nomes de host em um domínio que você controla, usando ACME DNS-01 (Let's Encrypt por padrão). Seu DNS autoritativo precisa estar acessível publicamente.
+- **`local`**: uma autoridade certificadora (CA) local e persistente para redes privadas, sem DNS público, acesso à Internet ou encaminhamento de portas. Os clientes precisam confiar na CA gerada.
+
+Os certificados cobrem nomes de host DNS, não endereços IP isolados. Executar o software não concede controle sobre `dnsbox.io`. A disponibilidade e a configuração do serviço público `dnsbox.io` são independentes deste repositório.
+
+## Início rápido em uma rede privada
+
+Exemplo: máquina virtual DNSBox `192.168.1.2`, aplicação HTTP `192.168.1.50:80`, zona privada `home.arpa`.
+
+Baixe o [arquivo da versão](https://github.com/crypto-chiefs/dnsbox/releases) correspondente, verifique-o usando `checksums.txt` e execute:
+
+```bash
+./dnsboxd \
+  --domain=home.arpa --ip=192.168.1.2 --ns=ns1 \
+  --tls-mode=local --allowed-cidrs=192.168.1.0/24 \
+  --dns-listen=192.168.1.2:53 --https-listen=192.168.1.2:443 \
+  --data-dir=/var/lib/dnsbox
+```
+
+O processo precisa de acesso de escrita ao diretório de dados e de permissão para escutar nessas portas. Configure o resolvedor da sua LAN para encaminhar **a zona `home.arpa`** para `192.168.1.2`; o DNSBox não fornece um serviço DNS recursivo de uso geral.
+
+Na primeira solicitação de certificado, o DNSBox cria `/var/lib/dnsbox/ca/root.crt` e sua chave privada. Copie com segurança **somente `root.crt`** para os clientes e instale-o no armazenamento de autoridades certificadoras confiáveis. Para testar uma única requisição, use:
+
+```bash
+curl --cacert root.crt \
+  --resolve 192-168-1-50.home.arpa:443:192.168.1.2 \
+  https://192-168-1-50.home.arpa/
+```
+
+Você pode criar a CA e um certificado de servidor antes de iniciar o serviço, usando a mesma configuração com a opção adicional `--issue=192-168-1-50.home.arpa`. No modo local, esse comando grava o certificado e termina sem abrir portas de escuta. Consulte o [guia de implantação privada](deployment.md).
+
+## Instalação
+
+Instalador para Linux e macOS, fixado na versão publicada:
+
+```bash
+curl --fail --location \
+  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.1/scripts/install.sh \
+  -o install-dnsbox.sh
+# Revise o script e, em seguida, execute:
+bash install-dnsbox.sh \
+  --domain=home.arpa --ip=192.168.1.2 \
+  --tls-mode=local --allowed-cidrs=192.168.1.0/24 \
+  --dns-listen=192.168.1.2:53 --https-listen=192.168.1.2:443
+```
+
+O instalador verifica a soma SHA-256 do arquivo, instala em `~/.dnsbox` e usa `~/.dnsbox/data` para dados persistentes em uma instalação nova. Ele cria um serviço systemd somente quando o systemd está em execução. Use `--no-systemd` para iniciar manualmente, inclusive no Calculate Linux/OpenRC:
+
+```bash
+~/.dnsbox/run-dnsbox
+```
+
+O arquivo gerado `~/.dnsbox/dnsbox.env` armazena a configuração e é preservado nas atualizações. Executar o instalador novamente atualiza os binários; para alterar as configurações, edite o arquivo de ambiente existente. Nem o instalador nem o desinstalador altera o resolvedor do sistema ou apaga os logs do sistema. No Windows, extraia o arquivo e execute `dnsboxd.exe` com as mesmas opções.
+
+## Certificados públicos e NAT
+
+Para o modo ACME, delegue um domínio ou subdomínio **que você controla** ao seu servidor DNSBox autoritativo. Forneça registros públicos de glue ou de endereço para o servidor de nomes, conforme necessário. Encaminhe **a porta 53 tanto por UDP quanto por TCP** para o DNSBox. Permita conexões HTTPS de saída para ACME.
+
+O DNS-01 **não** precisa da porta 80 de entrada. A porta 443 só precisa estar acessível aos clientes que usam o proxy HTTPS. O backend HTTP pode permanecer privado: permita a rede dele com `--allowed-cidrs`. Uma rede completamente isolada precisa usar o modo TLS local.
+
+```bash
+./dnsboxd --domain=apps.example.com --ip=203.0.113.10 --ns=ns1 \
+  --acme-email=admin@example.com --data-dir=/var/lib/dnsbox
+```
+
+Substitua os nomes e endereços de exemplo pelos seus. `--ip` é o endereço usado pelos clientes para acessar o DNSBox, não o endereço do backend. Um proxy IPv4 retorna registros A; um proxy IPv6 retorna registros AAAA, independentemente da família IP do backend.
+
+## Segurança e compatibilidade
+
+Por padrão, somente endereços públicos de backend são permitidos. Uma lista explícita `--allowed-cidrs` restringe o acesso às redes indicadas e permite implantações privadas. Mantenha uma implantação privada escutando nas interfaces da LAN e protegida pelo seu firewall.
+
+A API de gerenciamento usa `127.0.0.1:8080` por padrão. Alterações de registros exigem um token Bearer configurado; um valor vazio `--api-listen=` desativa a API. Os antigos endpoints de compartilhamento de certificados sem autenticação foram removidos. A versão v0.5 permite **uma única instância do DNSBox por zona**; não há suporte à sincronização de certificados ou dados de validação entre vários nós.
+
+Os certificados e as chaves privadas são armazenados de forma persistente no diretório de dados. Faça backup desse diretório com segurança. Os arquivos `certs/<hostname>.crt` e `.key` podem ser usados por outro serviço, como o ocserv, mas o proxy reverso HTTP do DNSBox não é um proxy OpenConnect/DTLS. Consulte as [instruções para exportar certificados](deployment.md#certificates-for-ocserv-or-another-service).
+
+Leia as [notas de migração para a v0.5](migration-v0.5.md) antes de atualizar a partir da v0.4.
+
+## Desenvolvimento
+
+Use a versão de Go declarada em [go.mod](../go.mod).
+
+```bash
+go test -race ./...
+go vet ./...
+bash scripts/test-install.sh
+go build ./cmd/dnsboxd
+```
+
+A integração contínua de publicação executa as verificações antes de publicar arquivos para Linux, macOS e Windows em amd64 e arm64. [Licença MIT](../LICENSE).

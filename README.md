@@ -2,6 +2,8 @@
 
 [Русский](doc/README.ru.md) · [Deployment and private networks](doc/deployment.md) · [Configuration](doc/configuration.md) · [Upgrade notes](doc/migration-v0.5.md)
 
+[Español](doc/README.es.md) · [Deutsch](doc/README.de.md) · [Français](doc/README.fr.md) · [中文](doc/README.zh.md) · [हिन्दी](doc/README.hi.md) · [Português](doc/README.pt.md) · [Türkçe](doc/README.tr.md) · [Bahasa Indonesia](doc/README.id.md) · [Tiếng Việt](doc/README.vi.md) · [한국어](doc/README.ko.md)
+
 DNSBox combines an authoritative DNS server with an HTTPS reverse proxy. A hostname such as `192-168-1-50.home.arpa` identifies a backend IP. DNS answers point to **the DNSBox proxy**, which terminates TLS and forwards HTTP to that backend. It supports dotted/dashed IPv4, dashed IPv6, WebSocket upgrades, and persistent certificates.
 
 Two TLS modes are available:
@@ -43,7 +45,7 @@ Linux and macOS installer (pinned to the release):
 
 ```bash
 curl --fail --location \
-  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.0/scripts/install.sh \
+  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.1/scripts/install.sh \
   -o install-dnsbox.sh
 # Review the script, then:
 bash install-dnsbox.sh \

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.1 — 2026-10-24
+
+- Full README documentation in all twelve supported languages.
+- Restored navigation between translations.
+- Release installer pinned to v0.5.1.
+
 ## v0.5.0 — 2026-10-24
 
 A reliability and security overhaul with explicit support for private deployments.
