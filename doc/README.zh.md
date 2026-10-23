@@ -43,7 +43,7 @@ Linux 和 macOS 安装脚本（固定到对应发行版）：
 
 ```bash
 curl --fail --location \
-  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.1/scripts/install.sh \
+  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.2/scripts/install.sh \
   -o install-dnsbox.sh
 # 检查脚本内容后运行：
 bash install-dnsbox.sh \
@@ -73,11 +73,47 @@ DNS-01 **不需要**开放入站 80 端口。443 端口只需能被使用 HTTPS 
 
 请将示例中的名称和地址替换为您自己的值。`--ip` 是客户端用于访问 DNSBox 的地址，而不是后端地址。IPv4 代理返回 A 记录，IPv6 代理返回 AAAA 记录，与后端使用的 IP 地址族无关。
 
+## 多个 DNS 节点与 ACME
+
+在每个节点上配置相同的静态 `--nameservers` 列表。标签必须唯一，地址必须是单播 IP 字面量；本机的 `--ns` 和 `--ip` 必须与其中一项一致。所有节点发布相同的 NS 集合、其他节点的地址和 SOA 主服务器。不配置此选项时，DNSBox 只发布自己的名称服务器。父区域的委派、glue 记录以及自定义 NS 地址覆盖必须保持一致。
+
+在多个权威节点上使用 ACME 时，请为每个节点配置 `--cluster-file`，以复制临时 DNS-01 TXT 值。所有节点应使用相同的区域、后端访问策略和自定义记录。第一个节点的示例：
+
+```bash
+./dnsboxd --domain=apps.example.com --ip=203.0.113.10 --ns=ns1 \
+  --nameservers=ns1=203.0.113.10,ns2=203.0.113.11,ns3=203.0.113.12 \
+  --cluster-file=/etc/dnsbox/cluster.json --data-dir=/var/lib/dnsbox
+```
+
+该节点的 `cluster.json`：
+
+```json
+{
+  "listen": "0.0.0.0:8443",
+  "certificate": "cluster-node.crt",
+  "private_key": "cluster-node.key",
+  "ca_certificate": "cluster-ca.crt",
+  "peers": ["https://203.0.113.11:8443", "https://203.0.113.12:8443"]
+}
+```
+
+每个节点都必须通过包含 IP 和端口的 HTTPS URL 显式列出所有其他节点。仅允许这些节点访问集群端口。使用专用的集群 CA，并为每个节点配置独立的证书和私钥；证书的 SAN 必须包含该节点的 IP，并同时允许服务器和客户端身份验证。相对路径以 JSON 文件所在目录为基准。保护 CA 和 TLS 文件，将 CA 私钥离线保存。节点通过双向 TLS 相互认证；集群仅复制临时 TXT 值，不传输 HTTPS 证书、私钥或本地模式的 CA。对应的环境变量为 `DNSBOX_NAMESERVERS` 和 `DNSBOX_CLUSTER_FILE`。
+
+## 区域根名称的 ALIAS 记录
+
+要将区域根名称指向外部托管服务的主机名，请在 `--records-file` 指定的文件中加入：
+
+```text
+apps.example.com ALIAS landing.example.net.
+```
+
+请在托管服务上配置您的根域名和 HTTPS。DNSBox 在 DNS 服务就绪前解析目标，在后台刷新地址，并使用缓存的 A/AAAA 记录响应查询，不在查询处理过程中进行网络解析。首次解析失败会阻止启动；缓存超过一小时未成功更新时，A/AAAA 查询返回 SERVFAIL。ALIAS 仅允许用于区域根名称，目标必须位于本区域之外，且不能与同名 A、AAAA 或 CNAME 共存。NS、SOA、TXT、MX 和基于 IP 的代理主机名仍可使用。静态名称服务器列表、集群 TXT 复制和 ALIAS 需要 v0.5.2 或更新版本。
+
 ## 安全性与兼容性
 
 默认情况下，只允许访问使用公共 IP 地址的后端。显式设置 `--allowed-cidrs` 列表后，访问范围会被限制在所列网段内，从而支持私有网络部署。私有部署应绑定到局域网接口，并置于防火墙保护之下。
 
-管理 API 默认监听 `127.0.0.1:8080`。修改记录需要配置 bearer 令牌；将 `--api-listen=` 设为空值可禁用该 API。旧版无需身份验证的证书共享接口已移除。v0.5 支持**每个 DNS 区域运行一个 DNSBox 实例**，不支持多节点间的证书或挑战记录同步。
+管理 API 默认监听 `127.0.0.1:8080`。修改记录需要配置 bearer 令牌；将 `--api-listen=` 设为空值可禁用该 API。旧版无需身份验证的证书共享接口已移除。每个节点保留独立的证书存储。
 
 证书和私钥会持久化保存在数据目录中。请安全地备份该目录。`certs/<hostname>.crt` 和 `.key` 文件可供 ocserv 等其他服务使用，但 DNSBox 的 HTTP 反向代理不是 OpenConnect/DTLS 代理。请参阅[证书导出说明](deployment.md#certificates-for-ocserv-or-another-service)。
 

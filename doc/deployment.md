@@ -41,7 +41,7 @@ To bootstrap the CA before serving clients, run your normal configuration with `
 
 Let's Encrypt DNS-01 validates **control of the hostname**, not public reachability of the backend web application. A private HTTP backend can therefore use a publicly trusted hostname if public DNS validation works. See [Let's Encrypt's DNS-01 documentation](https://letsencrypt.org/docs/challenge-types/#dns-01-challenge).
 
-For the built-in single-instance ACME flow:
+For one authoritative DNSBox node:
 
 1. Use a domain or delegated subdomain you control, for example `apps.example.com`.
 2. Delegate that zone to your nameserver; its public name must resolve to your router's public IP.
@@ -53,9 +53,28 @@ No incoming port 80 is required for DNS-01. Incoming 443 is required only for cl
 
 `--ip` must be reachable by clients. When advertising a private proxy address while publishing public authoritative DNS, set up the nameserver's public address/glue at the parent and a matching custom address record for that nameserver. Confirm from outside the LAN that the delegation reaches the VM and TXT queries return its answers. Split DNS may also be needed for client routing. Do not assume NAT hairpinning is available.
 
-This release does not synchronize challenge records among multiple independent DNSBox nodes and does not provide DNS zone transfers for secondary servers. Do not delegate to another DNS server unless it serves the same zone data and current ACME TXT values. The supported setup uses one DNSBox authoritative instance. If your registrar requires redundant nameservers, use a separate certificate client/provider or arrange external synchronization; pretending another independent instance is a secondary will cause intermittent validation failures.
+For two or more authoritative DNSBox nodes, use v0.5.2 or later and configure the static nameserver roster and authenticated TXT replication described below. All delegated servers must serve the same zone data and current ACME challenges. DNS zone transfers remain unsupported.
 
 For a genuinely offline network, public ACME validation is not possible. Use local mode and distribute trust instead.
+
+## Redundant authoritative nodes
+
+1. Set the same `--nameservers` roster on every node, with each node's `--ns` and `--ip` matching its own entry. Keep the parent NS/glue records, backend policy, and custom DNS records consistent. Every node must be publicly reachable on UDP and TCP 53 for public ACME validation.
+2. Prepare a dedicated cluster CA and separate node certificates/keys. Each certificate needs its reachable peer IP in the SAN and both server and client authentication usages. Keep the CA private key offline and the node credentials private.
+3. Configure `--cluster-file` on every node with its listener, credential paths, and explicit HTTPS IP-and-port URLs for all other nodes. Allow the cluster port only between those peers. See the [JSON example](../README.md#multiple-dns-nodes-and-acme) and [configuration details](configuration.md#authenticated-challenge-replication).
+4. Validate each configuration and check every node's NS, SOA, nameserver addresses, and TXT answers over both DNS transports. Test peer authentication and a controlled ACME request before enabling normal issuance. For an existing deployment, follow the [three-node migration procedure](migration-v0.5.md#migrate-a-three-node-zone).
+
+The cluster copies only temporary DNS-01 TXT values. Every configured peer must acknowledge a new value before validation proceeds; a missing or unauthenticated peer stops issuance. Simultaneous values at the same name remain independent. Each node stores and renews its own HTTPS certificates. Local-mode CAs are not synchronized, so private clients need the appropriate CA trust for every node they use.
+
+## Hosting the zone apex elsewhere
+
+An apex ALIAS in the custom records file can point to an external hosting hostname without embedding that provider's current IPs:
+
+```text
+apps.example.com ALIAS landing.example.net.
+```
+
+Configure the hosting provider to serve the apex domain and HTTPS, and give each DNSBox node the same records file through `--records-file`. ALIAS is allowed only at the apex, targets a name outside the zone, and cannot coexist there with A, AAAA, or CNAME. TXT and MX may coexist. DNSBox resolves the target before becoming ready and refreshes the cache in the background. Initial lookup failure stops startup; after an hour without a successful refresh, A/AAAA queries return SERVFAIL. NS, SOA, and encoded backend hostnames continue to use DNSBox's normal behavior.
 
 ## Certificates for ocserv or another service
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 
-VERSION=v0.5.1
+VERSION=v0.5.2
 INSTALL_DIR="${HOME:?HOME must be set}/.dnsbox"
 USE_SYSTEMD=auto
 IP=""
@@ -22,7 +22,7 @@ DEBUG=false
 usage() {
   cat <<'EOF'
 Usage: bash install.sh --ip=ADDRESS --domain=ZONE [options]
-  --version=v0.5.1              Release to download (never mixes release files)
+  --version=v0.5.2              Release to download (never mixes release files)
   --install-dir=PATH            Installation directory (default ~/.dnsbox)
   --ns=ns1                     Nameserver label
   --tls-mode=acme|local         Public ACME or private local CA

@@ -32,10 +32,11 @@ func (w *responseWriter) Hijack()                     {}
 
 func setup(t *testing.T) {
 	t.Helper()
-	oldDomain, oldIP, oldNS := config.Domain, config.IP, config.NSName
+	oldDomain, oldIP, oldNS, oldNameservers := config.Domain, config.IP, config.NSName, config.Nameservers
 	config.Domain = "example.test"
 	config.IP = "203.0.113.10"
 	config.NSName = "ns1"
+	config.Nameservers = ""
 	if err := customdns.Configure("", config.Domain); err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +44,7 @@ func setup(t *testing.T) {
 		config.Domain = oldDomain
 		config.IP = oldIP
 		config.NSName = oldNS
+		config.Nameservers = oldNameservers
 		_ = customdns.Configure("", oldDomain)
 	})
 }

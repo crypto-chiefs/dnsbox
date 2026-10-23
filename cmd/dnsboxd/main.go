@@ -15,6 +15,7 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/crypto-chiefs/dnsbox/internal/api"
+	"github.com/crypto-chiefs/dnsbox/internal/cluster"
 	"github.com/crypto-chiefs/dnsbox/internal/config"
 	"github.com/crypto-chiefs/dnsbox/internal/customdns"
 	"github.com/crypto-chiefs/dnsbox/internal/dnsserver"
@@ -47,6 +48,18 @@ func run(args []string) error {
 	if err := customdns.Configure(config.RecordsFile, config.Domain); err != nil {
 		return err
 	}
+	var peers *cluster.Manager
+	if config.ClusterFile != "" {
+		var err error
+		peers, err = cluster.Load(config.ClusterFile)
+		if err != nil {
+			return fmt.Errorf("cluster configuration: %w", err)
+		}
+	}
+	letsencrypt.SetChallengePublisher(nil)
+	if peers != nil {
+		letsencrypt.SetChallengePublisher(peers.Publish)
+	}
 	if config.CheckConfig {
 		fmt.Println("configuration is valid")
 		return nil
@@ -67,7 +80,7 @@ func run(args []string) error {
 	defer stop()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	errorsCh := make(chan error, 3)
+	errorsCh := make(chan error, 4)
 	var wg sync.WaitGroup
 	start := func(name string, serve func(context.Context) error) {
 		wg.Add(1)
@@ -77,6 +90,35 @@ func run(args []string) error {
 				errorsCh <- fmt.Errorf("%s: %w", name, err)
 				cancel()
 			}
+		}()
+	}
+	if config.IssueHostname == "" || config.TLSMode == "acme" {
+		if err := customdns.RefreshAliases(ctx); err != nil {
+			return fmt.Errorf("resolve DNS aliases: %w", err)
+		}
+		if peers != nil {
+			ready := make(chan struct{})
+			start("cluster", func(ctx context.Context) error { return peers.ServeReady(ctx, ready) })
+			select {
+			case <-ready:
+			case err := <-errorsCh:
+				cancel()
+				wg.Wait()
+				return err
+			case <-ctx.Done():
+				wg.Wait()
+				select {
+				case err := <-errorsCh:
+					return err
+				default:
+					return ctx.Err()
+				}
+			}
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			customdns.RunAliasRefresh(ctx)
 		}()
 	}
 	if config.IssueHostname != "" {

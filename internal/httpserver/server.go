@@ -17,6 +17,12 @@ func Serve(ctx context.Context, srv *http.Server, tls bool) error {
 	return serveListener(ctx, srv, listener, tls)
 }
 
+// ServeListener serves an already-bound listener with the shared graceful
+// shutdown lifecycle. It takes ownership of the listener.
+func ServeListener(ctx context.Context, srv *http.Server, listener net.Listener, tls bool) error {
+	return serveListener(ctx, srv, listener, tls)
+}
+
 func serveListener(ctx context.Context, srv *http.Server, listener net.Listener, tls bool) error {
 	var err error
 	srv.BaseContext = func(net.Listener) context.Context { return ctx }

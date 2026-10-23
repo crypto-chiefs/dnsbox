@@ -43,7 +43,7 @@ Linux와 macOS용 설치 스크립트이며, 특정 릴리스 버전으로 고�
 
 ```bash
 curl --fail --location \
-  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.1/scripts/install.sh \
+  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.2/scripts/install.sh \
   -o install-dnsbox.sh
 # 스크립트를 검토한 다음 실행합니다.
 bash install-dnsbox.sh \
@@ -73,11 +73,47 @@ DNS-01에는 인바운드 80번 포트가 **필요하지 않습니다**. 443번 
 
 예시 이름과 주소를 실제 값으로 바꾸세요. `--ip`는 클라이언트가 DNSBox에 접속할 때 사용하는 주소이며 백엔드 주소가 아닙니다. IPv4 프록시는 A 레코드를, IPv6 프록시는 AAAA 레코드를 반환합니다. 백엔드가 사용하는 IP 주소 계열과는 무관합니다.
 
+## 여러 DNS 노드와 ACME
+
+모든 노드에 동일한 정적 `--nameservers` 목록을 설정하세요. 레이블은 고유해야 하고 주소는 유니캐스트 IP 리터럴이어야 합니다. 로컬 `--ns`와 `--ip`는 목록의 한 항목과 일치해야 합니다. 모든 노드는 동일한 NS 집합, 다른 노드의 주소, SOA 기본 서버를 게시합니다. 이 옵션을 생략하면 DNSBox는 자신의 네임서버만 게시합니다. 상위 영역의 위임, glue 레코드, 사용자 지정 NS 주소 재정의도 일치해야 합니다.
+
+여러 권한 DNS 노드에서 ACME를 사용하려면 각 노드에 `--cluster-file`을 설정하여 임시 DNS-01 TXT 값을 복제하세요. 모든 노드에서 같은 영역, 백엔드 접근 정책, 사용자 지정 레코드를 사용하세요. 첫 번째 노드의 예시입니다.
+
+```bash
+./dnsboxd --domain=apps.example.com --ip=203.0.113.10 --ns=ns1 \
+  --nameservers=ns1=203.0.113.10,ns2=203.0.113.11,ns3=203.0.113.12 \
+  --cluster-file=/etc/dnsbox/cluster.json --data-dir=/var/lib/dnsbox
+```
+
+이 노드의 `cluster.json`:
+
+```json
+{
+  "listen": "0.0.0.0:8443",
+  "certificate": "cluster-node.crt",
+  "private_key": "cluster-node.key",
+  "ca_certificate": "cluster-ca.crt",
+  "peers": ["https://203.0.113.11:8443", "https://203.0.113.12:8443"]
+}
+```
+
+각 노드는 IP와 포트가 포함된 HTTPS URL로 다른 모든 노드를 명시적으로 나열해야 합니다. 클러스터 포트는 해당 노드에서만 접근하도록 제한하세요. 전용 클러스터 CA를 사용하고 노드마다 별도의 인증서와 키를 발급하세요. 인증서 SAN에는 해당 노드의 IP가 있어야 하며 서버 및 클라이언트 인증 용도를 모두 허용해야 합니다. 상대 경로는 JSON 파일이 있는 디렉터리를 기준으로 합니다. CA 및 TLS 파일을 보호하고 CA 개인 키는 오프라인으로 보관하세요. 노드는 상호 TLS로 인증합니다. 임시 TXT 값만 복제하며 HTTPS 인증서, 개인 키, 로컬 모드 CA는 전송하지 않습니다. 해당 환경 변수는 `DNSBOX_NAMESERVERS`와 `DNSBOX_CLUSTER_FILE`입니다.
+
+## 영역 루트의 ALIAS 레코드
+
+영역 루트를 외부 호스팅 이름으로 연결하려면 `--records-file`로 지정한 파일에 다음을 추가하세요.
+
+```text
+apps.example.com ALIAS landing.example.net.
+```
+
+호스팅 제공자에서도 해당 루트 도메인과 HTTPS를 제공하도록 설정하세요. DNSBox는 DNS 서비스 준비 전에 대상을 조회하고 백그라운드에서 갱신하며, 질의 처리 중에는 외부 조회 없이 캐시된 A/AAAA 레코드로 응답합니다. 최초 조회 실패 시 시작이 중단되고, 한 시간 동안 캐시를 성공적으로 갱신하지 못하면 A/AAAA 질의에 SERVFAIL을 반환합니다. ALIAS는 영역 루트에서만 허용되며 대상은 영역 밖의 이름이어야 합니다. 같은 이름의 A, AAAA, CNAME과 함께 사용할 수 없습니다. NS, SOA, TXT, MX와 IP 기반 프록시 호스트명은 계속 사용할 수 있습니다. 정적 네임서버 목록, 클러스터 TXT 복제, ALIAS는 v0.5.2 이상에서 사용할 수 있습니다.
+
 ## 보안과 호환성
 
 기본적으로 공용 IP 주소를 사용하는 백엔드만 허용됩니다. `--allowed-cidrs` 목록을 명시하면 나열된 네트워크로만 접근을 제한하여 사설 환경에서 배포할 수 있습니다. 사설 환경에서는 LAN 인터페이스에 바인딩하고 방화벽으로 보호하세요.
 
-관리 API의 기본 주소는 `127.0.0.1:8080`입니다. 레코드를 변경하려면 bearer 토큰을 설정해야 하며, `--api-listen=`을 빈 값으로 지정하면 API가 비활성화됩니다. 기존의 인증 없는 인증서 공유 엔드포인트는 제거되었습니다. v0.5는 **영역당 하나의 DNSBox 인스턴스**를 지원하며, 여러 노드 사이의 인증서 및 챌린지 동기화는 지원하지 않습니다.
+관리 API의 기본 주소는 `127.0.0.1:8080`입니다. 레코드를 변경하려면 bearer 토큰을 설정해야 하며, `--api-listen=`을 빈 값으로 지정하면 API가 비활성화됩니다. 기존의 인증 없는 인증서 공유 엔드포인트는 제거되었습니다. 각 노드는 자체 인증서 저장소를 유지합니다.
 
 인증서와 개인 키는 데이터 디렉터리에 영구 저장됩니다. 이 디렉터리를 안전하게 백업하세요. `certs/<hostname>.crt`와 `.key` 파일은 ocserv 같은 다른 서비스에서도 사용할 수 있지만, DNSBox의 HTTP 리버스 프록시는 OpenConnect/DTLS 프록시가 아닙니다. [인증서 내보내기 안내](deployment.md#certificates-for-ocserv-or-another-service)를 참고하세요.
 

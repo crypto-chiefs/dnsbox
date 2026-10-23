@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/crypto-chiefs/dnsbox/internal/config"
-	"github.com/crypto-chiefs/dnsbox/internal/customdns"
 	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"github.com/miekg/dns"
 )
@@ -18,11 +17,9 @@ func Start() error { return Serve(context.Background()) }
 func Serve(ctx context.Context) error { return ServeReady(ctx, nil) }
 
 // ServeReady binds both transports before starting either and sends readiness
-// only after both are serving. A nil ready channel disables the notification.
+// only after both are serving. The caller configures custom records first.
+// A nil ready channel disables the notification.
 func ServeReady(ctx context.Context, ready chan<- struct{}) error {
-	if err := customdns.Configure(config.RecordsFile, config.Domain); err != nil {
-		return err
-	}
 	lc := net.ListenConfig{}
 	tcp, err := lc.Listen(ctx, "tcp", config.DNSListen)
 	if err != nil {

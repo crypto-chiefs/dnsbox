@@ -45,7 +45,7 @@ Linux and macOS installer (pinned to the release):
 
 ```bash
 curl --fail --location \
-  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.1/scripts/install.sh \
+  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.2/scripts/install.sh \
   -o install-dnsbox.sh
 # Review the script, then:
 bash install-dnsbox.sh \
@@ -75,11 +75,47 @@ DNS-01 does **not** need incoming port 80. Port 443 only needs to be reachable b
 
 Replace example names and addresses with your own. `--ip` is the address clients use to reach DNSBox, not the backend address. An IPv4 proxy returns A records; an IPv6 proxy returns AAAA records, regardless of the backend's IP family.
 
+## Multiple DNS nodes and ACME
+
+Use the same static `--nameservers` list on every node. Each label must be unique and each address must be a literal unicast IP; the local `--ns` and `--ip` must match one entry. All nodes publish the same NS set, peer addresses, and SOA primary. Without this option, DNSBox publishes only its own nameserver. Keep parent delegation, glue, and any custom NS address overrides consistent.
+
+For ACME with multiple authoritative nodes, configure `--cluster-file` on each node to replicate temporary DNS-01 TXT values. Use the same zone, backend policy, and custom records on all nodes. Example for the first node:
+
+```bash
+./dnsboxd --domain=apps.example.com --ip=203.0.113.10 --ns=ns1 \
+  --nameservers=ns1=203.0.113.10,ns2=203.0.113.11,ns3=203.0.113.12 \
+  --cluster-file=/etc/dnsbox/cluster.json --data-dir=/var/lib/dnsbox
+```
+
+`cluster.json` for that node:
+
+```json
+{
+  "listen": "0.0.0.0:8443",
+  "certificate": "cluster-node.crt",
+  "private_key": "cluster-node.key",
+  "ca_certificate": "cluster-ca.crt",
+  "peers": ["https://203.0.113.11:8443", "https://203.0.113.12:8443"]
+}
+```
+
+Each node lists every other node as an explicit HTTPS IP-and-port URL. Restrict the cluster port to those peers. Use a dedicated cluster CA and a separate certificate/key for each node; the certificate needs that node's IP in its SAN and both server and client authentication usages. Paths are relative to the JSON file. Protect the CA and TLS files, and keep the CA private key offline. Mutual TLS authenticates peers; only temporary TXT values are replicated, never HTTPS certificates, private keys, or the local-mode CA. `DNSBOX_NAMESERVERS` and `DNSBOX_CLUSTER_FILE` are the corresponding environment variables.
+
+## Apex ALIAS records
+
+To point the zone apex at an external hosting name, put this in the file selected by `--records-file`:
+
+```text
+apps.example.com ALIAS landing.example.net.
+```
+
+Configure that hosting provider to serve your apex domain and HTTPS. DNSBox resolves the target before DNS becomes ready, refreshes it in the background, and answers from cached A/AAAA records without a lookup in the query path. An initial lookup failure stops startup; a cache older than one hour yields SERVFAIL for A/AAAA. ALIAS is allowed only at the apex, must target a name outside the zone, and cannot coexist with A, AAAA, or CNAME there. NS, SOA, TXT, MX, and IP-based proxy hostnames remain available. Static nameserver lists, cluster TXT replication, and ALIAS require v0.5.2 or later.
+
 ## Security and compatibility
 
 By default only public backend addresses are allowed. An explicit `--allowed-cidrs` list restricts access to those networks, enabling private deployments. Keep a private deployment bound to LAN interfaces and behind your firewall.
 
-The management API defaults to `127.0.0.1:8080`. Record mutations require a configured bearer token, and an empty `--api-listen=` disables it. The old unauthenticated certificate-sharing endpoints have been removed. v0.5 supports a **single DNSBox instance per zone**; multi-node certificate/challenge synchronization is not supported.
+The management API defaults to `127.0.0.1:8080`. Record mutations require a configured bearer token, and an empty `--api-listen=` disables it. The old unauthenticated certificate-sharing endpoints have been removed. Each node keeps its own certificate store.
 
 Certificates and private keys persist under the data directory. Back up that directory securely. The `certs/<hostname>.crt` and `.key` files can be used by another service, such as ocserv, but DNSBox's HTTP reverse proxy is not an OpenConnect/DTLS proxy. See [certificate export instructions](doc/deployment.md#certificates-for-ocserv-or-another-service).
 

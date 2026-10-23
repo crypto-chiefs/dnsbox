@@ -43,7 +43,7 @@ Script d’installation pour Linux et macOS, associé à une version précise :
 
 ```bash
 curl --fail --location \
-  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.1/scripts/install.sh \
+  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.2/scripts/install.sh \
   -o install-dnsbox.sh
 # Examinez le script, puis exécutez :
 bash install-dnsbox.sh \
@@ -73,11 +73,47 @@ DNS-01 **ne nécessite pas** l’ouverture du port entrant 80. Le port 443 doit 
 
 Remplacez les noms et adresses d’exemple par les vôtres. `--ip` désigne l’adresse utilisée par les clients pour joindre DNSBox, et non celle du serveur applicatif. Un proxy IPv4 renvoie des enregistrements A ; un proxy IPv6 renvoie des enregistrements AAAA, quelle que soit la famille IP du serveur applicatif.
 
+## Plusieurs nœuds DNS et ACME
+
+Utilisez la même liste statique `--nameservers` sur chaque nœud. Chaque libellé doit être unique et chaque adresse doit être une IP unicast littérale ; les valeurs locales de `--ns` et `--ip` doivent correspondre à une entrée. Tous les nœuds publient le même ensemble de NS, les mêmes adresses des nœuds et le même serveur primaire dans le SOA. Sans cette option, DNSBox publie uniquement son propre serveur de noms. Assurez-vous que la délégation dans la zone parente, les enregistrements glue et les éventuelles adresses NS personnalisées restent cohérents.
+
+Pour utiliser ACME avec plusieurs nœuds faisant autorité, configurez `--cluster-file` sur chaque nœud afin de répliquer les valeurs TXT temporaires de DNS-01. Utilisez la même zone, les mêmes règles d’accès aux serveurs applicatifs et les mêmes enregistrements personnalisés sur tous les nœuds. Exemple pour le premier nœud :
+
+```bash
+./dnsboxd --domain=apps.example.com --ip=203.0.113.10 --ns=ns1 \
+  --nameservers=ns1=203.0.113.10,ns2=203.0.113.11,ns3=203.0.113.12 \
+  --cluster-file=/etc/dnsbox/cluster.json --data-dir=/var/lib/dnsbox
+```
+
+Fichier `cluster.json` de ce nœud :
+
+```json
+{
+  "listen": "0.0.0.0:8443",
+  "certificate": "cluster-node.crt",
+  "private_key": "cluster-node.key",
+  "ca_certificate": "cluster-ca.crt",
+  "peers": ["https://203.0.113.11:8443", "https://203.0.113.12:8443"]
+}
+```
+
+Chaque nœud répertorie tous les autres au moyen d’une URL HTTPS explicite comprenant une IP et un port. Limitez l’accès au port du cluster à ces nœuds. Utilisez une CA dédiée au cluster, ainsi qu’un certificat et une clé distincts pour chaque nœud. Le certificat doit contenir l’IP du nœud dans son SAN et autoriser l’authentification serveur et client. Les chemins sont relatifs au fichier JSON. Protégez les fichiers de la CA et de TLS, et conservez la clé privée de la CA hors ligne. L’authentification TLS mutuelle identifie les nœuds ; seules les valeurs TXT temporaires sont répliquées, jamais les certificats HTTPS, les clés privées ou la CA du mode local. Les variables d’environnement correspondantes sont `DNSBOX_NAMESERVERS` et `DNSBOX_CLUSTER_FILE`.
+
+## Enregistrements ALIAS à l’apex de la zone
+
+Pour faire pointer l’apex de la zone vers un nom d’hébergement externe, ajoutez ceci dans le fichier sélectionné par `--records-file` :
+
+```text
+apps.example.com ALIAS landing.example.net.
+```
+
+Configurez ce fournisseur d’hébergement pour qu’il serve votre domaine à l’apex et HTTPS. DNSBox résout la cible avant que le service DNS ne soit prêt, l’actualise en arrière-plan et répond à partir des enregistrements A/AAAA mis en cache, sans résolution pendant le traitement des requêtes. Si la résolution initiale échoue, le démarrage s’arrête ; un cache de plus d’une heure entraîne une réponse SERVFAIL aux requêtes A/AAAA. ALIAS n’est autorisé qu’à l’apex, doit cibler un nom extérieur à la zone et ne peut pas y coexister avec A, AAAA ou CNAME. NS, SOA, TXT, MX et les noms d’hôte du proxy basés sur une IP restent disponibles. Les listes statiques de serveurs de noms, la réplication des TXT en cluster et ALIAS nécessitent v0.5.2 ou une version ultérieure.
+
 ## Sécurité et compatibilité
 
 Par défaut, seules les adresses publiques des serveurs applicatifs sont autorisées. Une liste explicite `--allowed-cidrs` limite l’accès aux réseaux indiqués et permet les déploiements privés. Pour un déploiement privé, liez les ports d’écoute aux interfaces du réseau local et protégez-les par votre pare-feu.
 
-L’API d’administration écoute par défaut sur `127.0.0.1:8080`. Les modifications d’enregistrements nécessitent un jeton Bearer configuré ; une valeur vide `--api-listen=` désactive l’API. Les anciens points d’accès de partage de certificats sans authentification ont été supprimés. La version v0.5 prend en charge **une seule instance DNSBox par zone** ; la synchronisation des certificats et des données de validation entre plusieurs nœuds n’est pas prise en charge.
+L’API d’administration écoute par défaut sur `127.0.0.1:8080`. Les modifications d’enregistrements nécessitent un jeton Bearer configuré ; une valeur vide `--api-listen=` désactive l’API. Les anciens points d’accès de partage de certificats sans authentification ont été supprimés. Chaque nœud conserve son propre magasin de certificats.
 
 Les certificats et les clés privées sont conservés dans le répertoire de données. Sauvegardez ce répertoire de façon sécurisée. Les fichiers `certs/<hostname>.crt` et `.key` peuvent être utilisés par un autre service, tel qu’ocserv, mais le proxy inverse HTTP de DNSBox n’est pas un proxy OpenConnect/DTLS. Consultez les [instructions d’exportation des certificats](deployment.md#certificates-for-ocserv-or-another-service).
 

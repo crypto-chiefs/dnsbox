@@ -43,7 +43,7 @@ Trình cài đặt cho Linux và macOS dưới đây được cố định theo 
 
 ```bash
 curl --fail --location \
-  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.1/scripts/install.sh \
+  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.2/scripts/install.sh \
   -o install-dnsbox.sh
 # Kiểm tra nội dung tập lệnh, sau đó chạy:
 bash install-dnsbox.sh \
@@ -73,11 +73,47 @@ DNS-01 **không** cần mở cổng 80 cho kết nối đi vào. Cổng 443 ch�
 
 Thay tên và địa chỉ trong ví dụ bằng giá trị của bạn. `--ip` là địa chỉ máy khách dùng để truy cập DNSBox, không phải địa chỉ máy chủ phía sau. Proxy IPv4 trả về bản ghi A; proxy IPv6 trả về bản ghi AAAA, bất kể máy chủ phía sau dùng họ địa chỉ IP nào.
 
+## Nhiều nút DNS và ACME
+
+Dùng cùng một danh sách tĩnh `--nameservers` trên mọi nút. Mỗi nhãn phải là duy nhất và mỗi địa chỉ phải là IP unicast ghi trực tiếp; `--ns` và `--ip` của nút phải khớp với một mục trong danh sách. Tất cả các nút công bố cùng tập NS, địa chỉ các nút khác và máy chủ chính trong SOA. Nếu không có tùy chọn này, DNSBox chỉ công bố máy chủ tên của chính nó. Việc ủy quyền ở vùng cha, bản ghi glue và mọi địa chỉ NS được ghi đè bằng bản ghi tùy chỉnh phải nhất quán.
+
+Để dùng ACME với nhiều nút có thẩm quyền, cấu hình `--cluster-file` trên từng nút nhằm sao chép các giá trị TXT DNS-01 tạm thời. Dùng cùng vùng DNS, chính sách truy cập backend và bản ghi tùy chỉnh trên mọi nút. Ví dụ cho nút đầu tiên:
+
+```bash
+./dnsboxd --domain=apps.example.com --ip=203.0.113.10 --ns=ns1 \
+  --nameservers=ns1=203.0.113.10,ns2=203.0.113.11,ns3=203.0.113.12 \
+  --cluster-file=/etc/dnsbox/cluster.json --data-dir=/var/lib/dnsbox
+```
+
+`cluster.json` cho nút đó:
+
+```json
+{
+  "listen": "0.0.0.0:8443",
+  "certificate": "cluster-node.crt",
+  "private_key": "cluster-node.key",
+  "ca_certificate": "cluster-ca.crt",
+  "peers": ["https://203.0.113.11:8443", "https://203.0.113.12:8443"]
+}
+```
+
+Mỗi nút phải liệt kê rõ tất cả nút còn lại bằng URL HTTPS chứa IP và cổng. Chỉ cho phép các nút này truy cập cổng cụm. Dùng CA riêng cho cụm và chứng chỉ/khóa riêng cho từng nút; SAN của chứng chỉ phải chứa IP của nút và cho phép xác thực cả máy chủ lẫn máy khách. Đường dẫn tương đối được tính từ thư mục chứa tệp JSON. Bảo vệ các tệp CA và TLS, đồng thời giữ khóa riêng của CA ngoại tuyến. Các nút xác thực lẫn nhau bằng TLS hai chiều. Chỉ các giá trị TXT tạm thời được sao chép; chứng chỉ HTTPS, khóa riêng và CA của chế độ cục bộ không được truyền đi. Các biến môi trường tương ứng là `DNSBOX_NAMESERVERS` và `DNSBOX_CLUSTER_FILE`.
+
+## Bản ghi ALIAS ở gốc vùng DNS
+
+Để trỏ gốc vùng DNS tới một tên của dịch vụ lưu trữ bên ngoài, thêm dòng sau vào tệp được chọn bằng `--records-file`:
+
+```text
+apps.example.com ALIAS landing.example.net.
+```
+
+Cấu hình nhà cung cấp dịch vụ lưu trữ để phục vụ miền gốc và HTTPS của bạn. DNSBox phân giải tên đích trước khi DNS sẵn sàng, cập nhật trong nền và trả lời bằng bản ghi A/AAAA trong bộ nhớ đệm, không tra cứu mạng khi xử lý từng truy vấn. Nếu lần phân giải đầu tiên thất bại, quá trình khởi động dừng lại; bộ nhớ đệm quá một giờ không được cập nhật thành công sẽ khiến truy vấn A/AAAA nhận SERVFAIL. ALIAS chỉ được dùng ở gốc vùng, phải trỏ tới tên nằm ngoài vùng và không được cùng tồn tại với A, AAAA hoặc CNAME có cùng tên. NS, SOA, TXT, MX và tên máy chủ proxy dựa trên IP vẫn hoạt động. Danh sách máy chủ tên tĩnh, sao chép TXT trong cụm và ALIAS yêu cầu v0.5.2 trở lên.
+
 ## Bảo mật và tương thích
 
 Mặc định, chỉ cho phép các máy chủ phía sau có địa chỉ IP công cộng. Danh sách `--allowed-cidrs` được cấu hình rõ ràng sẽ giới hạn quyền truy cập vào đúng các mạng được liệt kê, cho phép triển khai trong mạng riêng. Với triển khai riêng, hãy chỉ lắng nghe trên các giao diện LAN và bảo vệ bằng tường lửa.
 
-API quản trị mặc định sử dụng `127.0.0.1:8080`. Thay đổi bản ghi yêu cầu mã thông báo bearer đã được cấu hình; giá trị rỗng `--api-listen=` sẽ tắt API. Các điểm cuối chia sẻ chứng chỉ cũ không yêu cầu xác thực đã được loại bỏ. v0.5 hỗ trợ **một phiên bản DNSBox cho mỗi vùng DNS**; không hỗ trợ đồng bộ chứng chỉ hoặc thử thách xác thực giữa nhiều nút.
+API quản trị mặc định sử dụng `127.0.0.1:8080`. Thay đổi bản ghi yêu cầu mã thông báo bearer đã được cấu hình; giá trị rỗng `--api-listen=` sẽ tắt API. Các điểm cuối chia sẻ chứng chỉ cũ không yêu cầu xác thực đã được loại bỏ. Mỗi nút giữ kho chứng chỉ riêng.
 
 Chứng chỉ và khóa riêng được lưu lâu dài trong thư mục dữ liệu. Hãy sao lưu thư mục này một cách an toàn. Các tệp `certs/<hostname>.crt` và `.key` có thể dùng với dịch vụ khác như ocserv, nhưng proxy ngược HTTP của DNSBox không phải proxy OpenConnect/DTLS. Xem [hướng dẫn xuất chứng chỉ](deployment.md#certificates-for-ocserv-or-another-service).
 

@@ -23,6 +23,7 @@ import (
 // Configuration is immutable after Load returns and services start.
 var (
 	Domain, IP, NSName                                      string
+	Nameservers, ClusterFile                                string
 	Debug, ShowVersion, CheckConfig                         bool
 	DNSListen, HTTPSListen, APIListen, APIToken             string
 	DataDir, TLSMode, ACMEEmail, ACMEDirectory, RecordsFile string
@@ -54,6 +55,8 @@ func Load(args []string) error {
 	f.StringVar(&Domain, "domain", env("DOMAIN", ""), "owned DNS zone, or home.arpa in local mode")
 	f.StringVar(&IP, "ip", env("IP", ""), "DNSBox address advertised in DNS answers")
 	f.StringVar(&NSName, "ns", env("NS_NAME", "ns1"), "nameserver label within the zone")
+	f.StringVar(&Nameservers, "nameservers", env("NAMESERVERS", ""), "comma-separated authoritative nameservers as label=IP")
+	f.StringVar(&ClusterFile, "cluster-file", env("CLUSTER_FILE", ""), "optional authenticated cluster configuration file")
 	f.StringVar(&DNSListen, "dns-listen", env("DNS_LISTEN", ":53"), "UDP and TCP DNS bind address")
 	f.StringVar(&HTTPSListen, "https-listen", env("HTTPS_LISTEN", ":443"), "HTTPS bind address")
 	f.StringVar(&APIListen, "api-listen", env("API_LISTEN", "127.0.0.1:8080"), "loopback management bind address; empty disables")
@@ -121,6 +124,9 @@ func Validate() error {
 		return errors.New("--ip must be a unicast IPv4 or IPv6 address")
 	}
 	IP = addr.Unmap().String()
+	if err := validateNameservers(); err != nil {
+		return err
+	}
 	if TLSMode != "acme" && TLSMode != "local" {
 		return errors.New("--tls-mode must be acme or local")
 	}

@@ -60,7 +60,13 @@ func newACMEFixture(t *testing.T, alreadyValid bool) *acmeFixture {
 	oldClient, oldCheck := acmeHTTPClient, checkPropagation
 	acmeHTTPClient = f.server.Client()
 	checkPropagation = func(ctx context.Context, name, value string) error {
-		if got, ok := txtstore.GetLocal(name); !ok || got != value {
+		found := false
+		for _, got := range txtstore.GetAll(name) {
+			if got == value {
+				found = true
+			}
+		}
+		if !found {
 			return fmt.Errorf("TXT was not installed before propagation check")
 		}
 		return ctx.Err()
@@ -335,5 +341,111 @@ func TestDirectorySwitchDoesNotAdoptStagingExports(t *testing.T) {
 	config.ACMEDirectory = ""
 	if HasCertificate(domain) {
 		t.Fatal("staging exports adopted by production after bundle loss")
+	}
+}
+
+func TestACMEPublisherOrdersReplicationBeforeValidationAndCleansExactValues(t *testing.T) {
+	for _, failPropagation := range []bool{false, true} {
+		t.Run(fmt.Sprintf("propagation-fails-%t", failPropagation), func(t *testing.T) {
+			configureTest(t, "acme")
+			fixture := newACMEFixture(t, false)
+			oldPublisher := challengePublisher
+			t.Cleanup(func() { challengePublisher = oldPublisher })
+			replicas := []*txtstore.Store{txtstore.New(), txtstore.New()}
+			const domain = "192-168-1-10.example.test"
+			const name = "_acme-challenge." + domain
+			const unrelated = "another-active-order"
+			if err := txtstore.Add(name, unrelated, 120); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { txtstore.DeleteValue(name, unrelated) })
+			for _, replica := range replicas {
+				if err := replica.Add(name, unrelated, 120); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cleanupCalled := false
+			SetChallengePublisher(func(ctx context.Context, name, value string, ttl int) (func(context.Context) error, error) {
+				localCleanup, err := publishLocally(ctx, name, value, ttl)
+				if err != nil {
+					return nil, err
+				}
+				for _, replica := range replicas {
+					if err := replica.Add(name, value, ttl); err != nil {
+						return nil, err
+					}
+				}
+				return func(cleanupCtx context.Context) error {
+					if cleanupCtx.Err() != nil {
+						t.Error("cleanup received canceled context")
+					}
+					cleanupCalled = true
+					for _, replica := range replicas {
+						replica.DeleteValue(name, value)
+					}
+					return localCleanup(cleanupCtx)
+				}, nil
+			})
+			checkPropagation = func(ctx context.Context, name, value string) error {
+				for i, replica := range replicas {
+					found := false
+					for _, got := range replica.GetAll(name) {
+						if got == value {
+							found = true
+						}
+					}
+					if !found {
+						t.Errorf("ACME validation reached before replica %d stored challenge", i)
+					}
+				}
+				if failPropagation {
+					return errors.New("propagation failed")
+				}
+				return nil
+			}
+			_, err := IssueCertificateContext(context.Background(), domain)
+			if (err != nil) != failPropagation {
+				t.Fatalf("unexpected issuance result: %v", err)
+			}
+			if !cleanupCalled {
+				t.Fatal("ACME did not clean the published challenge")
+			}
+			for i, replica := range replicas {
+				if got := replica.GetAll(name); len(got) != 1 || got[0] != unrelated {
+					t.Fatalf("replica %d lost independent order: %v", i, got)
+				}
+			}
+			if got := txtstore.GetAll(name); len(got) != 1 || got[0] != unrelated {
+				t.Fatalf("local cleanup lost independent order: %v", got)
+			}
+			fixture.mu.Lock()
+			accepts := fixture.accepts
+			fixture.mu.Unlock()
+			if failPropagation && accepts != 0 {
+				t.Fatal("ACME accepted challenge after failed propagation")
+			}
+		})
+	}
+}
+
+func TestACMEPublisherFailureStopsBeforeValidation(t *testing.T) {
+	configureTest(t, "acme")
+	fixture := newACMEFixture(t, false)
+	oldPublisher := challengePublisher
+	t.Cleanup(func() { challengePublisher = oldPublisher })
+	SetChallengePublisher(func(context.Context, string, string, int) (func(context.Context) error, error) {
+		return nil, errors.New("peer unavailable")
+	})
+	checkPropagation = func(context.Context, string, string) error {
+		t.Error("checked propagation after publication failure")
+		return nil
+	}
+	if _, err := IssueCertificateContext(context.Background(), "192-168-1-10.example.test"); err == nil || !strings.Contains(err.Error(), "peer unavailable") {
+		t.Fatalf("unexpected result: %v", err)
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if fixture.accepts != 0 {
+		t.Fatal("accepted challenge despite failed peer publication")
 	}
 }

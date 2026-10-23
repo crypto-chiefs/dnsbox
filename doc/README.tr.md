@@ -43,7 +43,7 @@ Belirli sürüme sabitlenmiş Linux ve macOS kurulum betiği:
 
 ```bash
 curl --fail --location \
-  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.1/scripts/install.sh \
+  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.2/scripts/install.sh \
   -o install-dnsbox.sh
 # Betiği inceleyin, ardından çalıştırın:
 bash install-dnsbox.sh \
@@ -73,11 +73,47 @@ DNS-01 için **gelen 80 portunu açmak gerekmez**. 443 portunun yalnızca HTTPS 
 
 Örnek adları ve adresleri kendi değerlerinizle değiştirin. `--ip`, arka uç adresini değil, istemcilerin DNSBox'a ulaşmak için kullandığı adresi belirtir. Arka ucun IP ailesinden bağımsız olarak IPv4 proxy A kayıtları, IPv6 proxy ise AAAA kayıtları döndürür.
 
+## Birden fazla DNS düğümü ve ACME
+
+Her düğümde aynı statik `--nameservers` listesini kullanın. Her etiket benzersiz, her adres ise doğrudan yazılmış bir unicast IP adresi olmalıdır. Yerel `--ns` ve `--ip` değerleri listedeki bir girişle eşleşmelidir. Tüm düğümler aynı NS kümesini, düğüm adreslerini ve SOA birincil sunucusunu yayımlar. Bu seçenek verilmezse DNSBox yalnızca kendi ad sunucusunu yayımlar. Üst bölgedeki yetki devrini, glue kayıtlarını ve özel NS adresi değişikliklerini birbiriyle tutarlı tutun.
+
+Birden fazla yetkili düğümle ACME kullanmak için her düğümde `--cluster-file` yapılandırarak geçici DNS-01 TXT değerlerini çoğaltın. Tüm düğümlerde aynı bölgeyi, arka uç erişim kurallarını ve özel kayıtları kullanın. İlk düğüm için örnek:
+
+```bash
+./dnsboxd --domain=apps.example.com --ip=203.0.113.10 --ns=ns1 \
+  --nameservers=ns1=203.0.113.10,ns2=203.0.113.11,ns3=203.0.113.12 \
+  --cluster-file=/etc/dnsbox/cluster.json --data-dir=/var/lib/dnsbox
+```
+
+Bu düğümün `cluster.json` dosyası:
+
+```json
+{
+  "listen": "0.0.0.0:8443",
+  "certificate": "cluster-node.crt",
+  "private_key": "cluster-node.key",
+  "ca_certificate": "cluster-ca.crt",
+  "peers": ["https://203.0.113.11:8443", "https://203.0.113.12:8443"]
+}
+```
+
+Her düğüm, diğer tüm düğümleri IP ve port içeren açık bir HTTPS URL'siyle listeler. Küme portuna erişimi bu düğümlerle sınırlayın. Kümeye özel bir CA ve her düğüm için ayrı bir sertifika ile anahtar kullanın. Sertifika, SAN alanında düğümün IP adresini içermeli ve hem sunucu hem istemci kimlik doğrulamasına izin vermelidir. Dosya yolları JSON dosyasına göredir. CA ve TLS dosyalarını koruyun; CA'nın özel anahtarını çevrimdışı tutun. Karşılıklı TLS, düğümlerin kimliğini doğrular. Yalnızca geçici TXT değerleri çoğaltılır; HTTPS sertifikaları, özel anahtarlar veya yerel modun CA'sı asla paylaşılmaz. İlgili ortam değişkenleri `DNSBOX_NAMESERVERS` ve `DNSBOX_CLUSTER_FILE` şeklindedir.
+
+## Bölge kökünde ALIAS kayıtları
+
+Bölge kökünü harici bir barındırma hizmetinin adına yönlendirmek için `--records-file` ile seçilen dosyaya şunu ekleyin:
+
+```text
+apps.example.com ALIAS landing.example.net.
+```
+
+Barındırma sağlayıcısını, kök alan adınıza ve HTTPS'ye hizmet verecek şekilde yapılandırın. DNSBox, DNS hizmeti hazır olmadan önce hedefi çözer, arka planda günceller ve sorgu işleme sırasında yeni bir çözümleme yapmadan önbellekteki A/AAAA kayıtlarıyla yanıt verir. İlk çözümleme başarısız olursa başlatma durur. Önbellek bir saatten eskiyse A/AAAA sorgularına SERVFAIL döndürülür. ALIAS yalnızca bölge kökünde kullanılabilir, bölgenin dışındaki bir adı hedeflemeli ve aynı yerde A, AAAA veya CNAME ile birlikte bulunmamalıdır. NS, SOA, TXT, MX ve IP tabanlı proxy ana makine adları kullanılabilir olmaya devam eder. Statik ad sunucusu listeleri, kümede TXT çoğaltma ve ALIAS için v0.5.2 veya üzeri gerekir.
+
 ## Güvenlik ve uyumluluk
 
 Varsayılan olarak yalnızca genel arka uç adreslerine izin verilir. Açıkça belirtilen bir `--allowed-cidrs` listesi, erişimi bu ağlarla sınırlar ve özel ağ kurulumlarını mümkün kılar. Özel ağ kurulumunda dinleme adreslerini LAN arayüzlerine bağlayın ve hizmeti güvenlik duvarınızın arkasında tutun.
 
-Yönetim API'si varsayılan olarak `127.0.0.1:8080` adresini kullanır. Kayıt değişiklikleri için yapılandırılmış bir Bearer belirteci gerekir. Boş `--api-listen=` değeri API'yi devre dışı bırakır. Kimlik doğrulaması olmadan sertifika paylaşan eski uç noktalar kaldırılmıştır. v0.5, **her DNS bölgesi için tek bir DNSBox örneğini** destekler. Birden fazla düğüm arasında sertifika ve doğrulama verisi eşitlemesi desteklenmez.
+Yönetim API'si varsayılan olarak `127.0.0.1:8080` adresini kullanır. Kayıt değişiklikleri için yapılandırılmış bir Bearer belirteci gerekir. Boş `--api-listen=` değeri API'yi devre dışı bırakır. Kimlik doğrulaması olmadan sertifika paylaşan eski uç noktalar kaldırılmıştır. Her düğüm kendi sertifika deposunu tutar.
 
 Sertifikalar ve özel anahtarlar veri dizininde kalıcı olarak saklanır. Bu dizini güvenli bir şekilde yedekleyin. `certs/<hostname>.crt` ve `.key` dosyaları ocserv gibi başka bir hizmet tarafından kullanılabilir. Ancak DNSBox'ın HTTP ters proxy hizmeti, OpenConnect/DTLS proxy değildir. [Sertifika dışa aktarma yönergelerine](deployment.md#certificates-for-ocserv-or-another-service) bakın.
 

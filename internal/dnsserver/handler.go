@@ -18,8 +18,9 @@ func rrHeader(name string, kind uint16, ttl uint32) dns.RR_Header {
 }
 func soa() *dns.SOA {
 	zone := dns.Fqdn(config.Domain)
+	primary := config.AuthoritativeNameservers()[0]
 	return &dns.SOA{Hdr: rrHeader(zone, dns.TypeSOA, negativeTTL),
-		Ns: dns.Fqdn(config.NSName + "." + config.Domain), Mbox: "hostmaster." + zone,
+		Ns: dns.Fqdn(primary.Name), Mbox: "hostmaster." + zone,
 		Serial: 1, Refresh: 3600, Retry: 600, Expire: 86400, Minttl: negativeTTL}
 }
 func address(name string, kind uint16, ip net.IP) dns.RR {
@@ -85,12 +86,19 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 	msg.Authoritative = true
-	ns := dns.Fqdn(config.NSName + "." + config.Domain)
+	nameservers := config.AuthoritativeNameservers()
+	var nameserverIP net.IP
+	for _, ns := range nameservers {
+		if name == dns.Fqdn(ns.Name) {
+			nameserverIP = net.ParseIP(ns.IP)
+			break
+		}
+	}
 	isHost := false
 	if _, err := config.ValidateHostname(strings.TrimSuffix(name, ".")); err == nil {
 		isHost = true
 	}
-	exists := name == zone || name == ns || isHost || customdns.Exists(name)
+	exists := name == zone || nameserverIP != nil || isHost || customdns.Exists(name)
 	hasCustomAddress := len(customdns.Records(name, dns.TypeA))+len(customdns.Records(name, dns.TypeAAAA)) > 0
 	if strings.HasPrefix(name, "_acme-challenge.") {
 		if _, err := config.ValidateHostname(strings.TrimSuffix(strings.TrimPrefix(name, "_acme-challenge."), ".")); err == nil {
@@ -103,7 +111,7 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 	if q.Qtype == dns.TypeTXT {
-		if value, ok := txtstore.Get(name); ok {
+		for _, value := range txtstore.GetAll(name) {
 			parts := []string{}
 			for len(value) > 255 {
 				parts = append(parts, value[:255])
@@ -118,6 +126,10 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 	if len(msg.Answer) > 0 {
 		return
 	}
+	if (q.Qtype == dns.TypeA || q.Qtype == dns.TypeAAAA) && customdns.AliasUnavailable(name) {
+		msg.Rcode = dns.RcodeServerFailure
+		return
+	}
 	switch q.Qtype {
 	case dns.TypeSOA:
 		if name == zone {
@@ -125,20 +137,27 @@ func handleQuery(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	case dns.TypeNS:
 		if name == zone {
-			msg.Answer = append(msg.Answer, &dns.NS{Hdr: rrHeader(q.Name, dns.TypeNS, 300), Ns: ns})
-			glue := append(customdns.Records(ns, dns.TypeA), customdns.Records(ns, dns.TypeAAAA)...)
-			if len(glue) > 0 {
-				msg.Extra = append(msg.Extra, glue...)
-			} else {
-				for _, kind := range []uint16{dns.TypeA, dns.TypeAAAA} {
-					if rr := address(ns, kind, net.ParseIP(config.IP)); rr != nil {
-						msg.Extra = append(msg.Extra, rr)
+			for _, server := range nameservers {
+				ns := dns.Fqdn(server.Name)
+				msg.Answer = append(msg.Answer, &dns.NS{Hdr: rrHeader(q.Name, dns.TypeNS, 300), Ns: ns})
+				glue := append(customdns.Records(ns, dns.TypeA), customdns.Records(ns, dns.TypeAAAA)...)
+				if len(glue) > 0 {
+					msg.Extra = append(msg.Extra, glue...)
+				} else {
+					for _, kind := range []uint16{dns.TypeA, dns.TypeAAAA} {
+						if rr := address(ns, kind, net.ParseIP(server.IP)); rr != nil {
+							msg.Extra = append(msg.Extra, rr)
+						}
 					}
 				}
 			}
 		}
 	case dns.TypeA, dns.TypeAAAA:
-		if (name == ns || isHost) && !hasCustomAddress {
+		if nameserverIP != nil && !hasCustomAddress {
+			if rr := address(q.Name, q.Qtype, nameserverIP); rr != nil {
+				msg.Answer = append(msg.Answer, rr)
+			}
+		} else if isHost && !hasCustomAddress {
 			// The encoded address identifies the backend. Clients connect to
 			// DNSBox itself, where HTTPS is terminated and proxied over HTTP.
 			if rr := address(q.Name, q.Qtype, net.ParseIP(config.IP)); rr != nil {

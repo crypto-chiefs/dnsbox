@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.2 — 2026-10-24
+
+- Explicit nameserver rosters with validated local identity, consistent NS/glue records, and a shared deterministic SOA primary across nodes.
+- Dedicated-CA mutual TLS replication of temporary ACME DNS-01 TXT values to explicitly configured peers; simultaneous values and exact-value cleanup preserve other orders. Certificates and private keys remain local.
+- Apex ALIAS records with initial resolution, background refresh, bounded cache lifetime, and SERVFAIL when no usable cached address is available.
+- Expanded migration guidance for preserving legacy production certificates and restoring missing intermediates before cutover.
+- Real three-process integration coverage for DNS, authenticated TXT fanout, peer rejection, and Linux SIGTERM/listener cleanup; configuration validation checks that avoid data or listener side effects.
+- Updated all twelve README translations, three-node migration instructions, and installer release pin to v0.5.2.
+
 ## v0.5.1 — 2026-10-24
 
 - Full README documentation in all twelve supported languages.

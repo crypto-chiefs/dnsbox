@@ -43,7 +43,7 @@ Penginstal Linux dan macOS berikut menggunakan versi rilis tertentu:
 
 ```bash
 curl --fail --location \
-  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.1/scripts/install.sh \
+  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.2/scripts/install.sh \
   -o install-dnsbox.sh
 # Periksa isi skrip, lalu jalankan:
 bash install-dnsbox.sh \
@@ -73,11 +73,47 @@ DNS-01 **tidak** memerlukan akses masuk ke port 80. Port 443 hanya perlu dapat d
 
 Ganti nama dan alamat contoh dengan milik Anda. `--ip` adalah alamat yang digunakan klien untuk mengakses DNSBox, bukan alamat backend. Proksi IPv4 mengembalikan catatan A; proksi IPv6 mengembalikan catatan AAAA, terlepas dari versi IP yang digunakan backend.
 
+## Beberapa node DNS dan ACME
+
+Gunakan daftar statis `--nameservers` yang sama pada setiap node. Setiap label harus unik dan setiap alamat harus berupa IP unicast literal; nilai lokal `--ns` dan `--ip` harus cocok dengan salah satu entri. Semua node menerbitkan kumpulan NS, alamat node lain, dan server utama SOA yang sama. Tanpa opsi ini, DNSBox hanya menerbitkan nameserver miliknya sendiri. Pastikan delegasi zona induk, catatan glue, dan penggantian alamat NS khusus tetap sesuai.
+
+Untuk ACME dengan beberapa node otoritatif, konfigurasikan `--cluster-file` pada setiap node agar nilai TXT DNS-01 sementara direplikasi. Gunakan zona, kebijakan akses backend, dan catatan khusus yang sama di semua node. Contoh untuk node pertama:
+
+```bash
+./dnsboxd --domain=apps.example.com --ip=203.0.113.10 --ns=ns1 \
+  --nameservers=ns1=203.0.113.10,ns2=203.0.113.11,ns3=203.0.113.12 \
+  --cluster-file=/etc/dnsbox/cluster.json --data-dir=/var/lib/dnsbox
+```
+
+`cluster.json` untuk node tersebut:
+
+```json
+{
+  "listen": "0.0.0.0:8443",
+  "certificate": "cluster-node.crt",
+  "private_key": "cluster-node.key",
+  "ca_certificate": "cluster-ca.crt",
+  "peers": ["https://203.0.113.11:8443", "https://203.0.113.12:8443"]
+}
+```
+
+Setiap node mencantumkan semua node lain secara eksplisit sebagai URL HTTPS berisi IP dan port. Batasi akses port kluster hanya ke node tersebut. Gunakan CA khusus kluster dan sertifikat/kunci terpisah untuk setiap node; SAN sertifikat harus berisi IP node dan mengizinkan autentikasi server serta klien. Jalur relatif dihitung dari direktori berkas JSON. Lindungi berkas CA dan TLS, serta simpan kunci privat CA secara offline. Node saling mengautentikasi melalui TLS dua arah. Hanya nilai TXT sementara yang direplikasi, bukan sertifikat HTTPS, kunci privat, atau CA mode lokal. Variabel lingkungannya adalah `DNSBOX_NAMESERVERS` dan `DNSBOX_CLUSTER_FILE`.
+
+## Catatan ALIAS pada akar zona
+
+Untuk mengarahkan akar zona ke nama hosting eksternal, tambahkan ini ke berkas yang dipilih melalui `--records-file`:
+
+```text
+apps.example.com ALIAS landing.example.net.
+```
+
+Konfigurasikan penyedia hosting agar melayani domain akar dan HTTPS Anda. DNSBox mencari alamat target sebelum DNS siap, memperbaruinya di latar belakang, lalu menjawab menggunakan catatan A/AAAA yang tersimpan tanpa pencarian jaringan saat memproses kueri. Kegagalan pencarian pertama menghentikan proses mulai; cache yang tidak berhasil diperbarui selama satu jam menghasilkan SERVFAIL untuk kueri A/AAAA. ALIAS hanya boleh ada pada akar zona, harus menunjuk ke nama di luar zona, dan tidak boleh berdampingan dengan A, AAAA, atau CNAME pada nama yang sama. NS, SOA, TXT, MX, dan hostname proksi berbasis IP tetap tersedia. Daftar nameserver statis, replikasi TXT kluster, dan ALIAS memerlukan v0.5.2 atau lebih baru.
+
 ## Keamanan dan kompatibilitas
 
 Secara bawaan, hanya alamat backend publik yang diizinkan. Daftar `--allowed-cidrs` yang ditentukan secara eksplisit membatasi akses ke jaringan yang tercantum, sehingga memungkinkan penerapan privat. Ikat penerapan privat ke antarmuka LAN dan lindungi dengan firewall Anda.
 
-API pengelolaan menggunakan `127.0.0.1:8080` secara bawaan. Perubahan catatan memerlukan token bearer yang sudah dikonfigurasi, dan nilai kosong `--api-listen=` menonaktifkan API. Endpoint berbagi sertifikat lama yang tidak memerlukan autentikasi telah dihapus. v0.5 mendukung **satu instans DNSBox per zona**; sinkronisasi sertifikat dan tantangan validasi antarnode tidak didukung.
+API pengelolaan menggunakan `127.0.0.1:8080` secara bawaan. Perubahan catatan memerlukan token bearer yang sudah dikonfigurasi, dan nilai kosong `--api-listen=` menonaktifkan API. Endpoint berbagi sertifikat lama yang tidak memerlukan autentikasi telah dihapus. Setiap node memiliki penyimpanan sertifikatnya sendiri.
 
 Sertifikat dan kunci privat disimpan secara persisten di direktori data. Cadangkan direktori tersebut dengan aman. File `certs/<hostname>.crt` dan `.key` dapat digunakan oleh layanan lain, seperti ocserv, tetapi proksi balik HTTP DNSBox bukan proksi OpenConnect/DTLS. Lihat [petunjuk ekspor sertifikat](deployment.md#certificates-for-ocserv-or-another-service).
 

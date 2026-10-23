@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/crypto-chiefs/dnsbox/internal/config"
-	"github.com/crypto-chiefs/dnsbox/internal/txtstore"
 	"github.com/miekg/dns"
 	"golang.org/x/crypto/acme"
 )
@@ -80,10 +79,11 @@ func issueACME(ctx context.Context, domain string) (tls.Certificate, error) {
 		}
 		name := "_acme-challenge." + domain
 		// Keep TXT until the complete order has finished, including slow CA polls.
-		if err := txtstore.Put(name, value, int(issuanceTimeout()/time.Second)+60); err != nil {
-			return tls.Certificate{}, fmt.Errorf("store DNS-01 challenge: %w", err)
+		cleanup, err := challengePublisher(ctx, name, value, int(issuanceTimeout()/time.Second)+60)
+		if err != nil {
+			return tls.Certificate{}, fmt.Errorf("publish DNS-01 challenge: %w", err)
 		}
-		defer txtstore.Delete(name)
+		defer cleanupChallenge(cleanup)
 		propCtx, cancel := context.WithTimeout(ctx, config.ACMEDNSTimeout)
 		err = checkPropagation(propCtx, name, value)
 		cancel()

@@ -43,7 +43,7 @@ Installationsskript für Linux und macOS, auf die Release-Version festgelegt:
 
 ```bash
 curl --fail --location \
-  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.1/scripts/install.sh \
+  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.2/scripts/install.sh \
   -o install-dnsbox.sh
 # Prüfen Sie das Skript und führen Sie dann Folgendes aus:
 bash install-dnsbox.sh \
@@ -73,11 +73,47 @@ DNS-01 benötigt **keinen** eingehenden Port 80. Port 443 muss nur für die Clie
 
 Ersetzen Sie die Beispielnamen und -adressen durch Ihre eigenen. `--ip` bezeichnet die Adresse, über die Clients DNSBox erreichen, nicht die Backend-Adresse. Ein IPv4-Proxy liefert A-Datensätze, ein IPv6-Proxy AAAA-Datensätze, unabhängig von der IP-Familie des Backends.
 
+## Mehrere DNS-Instanzen und ACME
+
+Verwenden Sie auf jeder Instanz dieselbe statische Liste für `--nameservers`. Jeder Name muss eindeutig sein, und jede Adresse muss eine wörtliche Unicast-IP-Adresse sein. Die lokalen Werte für `--ns` und `--ip` müssen zu einem Eintrag passen. Alle Instanzen veröffentlichen denselben NS-Satz, dieselben Adressen der anderen Instanzen und denselben primären Server im SOA-Datensatz. Ohne diese Option veröffentlicht DNSBox nur seinen eigenen Nameserver. Halten Sie die Delegation in der übergeordneten Zone, die Glue-Datensätze und etwaige benutzerdefinierte NS-Adressdatensätze konsistent.
+
+Konfigurieren Sie für ACME mit mehreren autoritativen Instanzen auf jeder Instanz `--cluster-file`, um temporäre DNS-01-TXT-Werte zu replizieren. Verwenden Sie überall dieselbe Zone, dieselben Backend-Zugriffsregeln und dieselben benutzerdefinierten Datensätze. Beispiel für die erste Instanz:
+
+```bash
+./dnsboxd --domain=apps.example.com --ip=203.0.113.10 --ns=ns1 \
+  --nameservers=ns1=203.0.113.10,ns2=203.0.113.11,ns3=203.0.113.12 \
+  --cluster-file=/etc/dnsbox/cluster.json --data-dir=/var/lib/dnsbox
+```
+
+Die zugehörige `cluster.json` dieser Instanz:
+
+```json
+{
+  "listen": "0.0.0.0:8443",
+  "certificate": "cluster-node.crt",
+  "private_key": "cluster-node.key",
+  "ca_certificate": "cluster-ca.crt",
+  "peers": ["https://203.0.113.11:8443", "https://203.0.113.12:8443"]
+}
+```
+
+Jede Instanz führt alle anderen Instanzen mit einer expliziten HTTPS-URL aus IP-Adresse und Port auf. Beschränken Sie den Zugriff auf den Cluster-Port auf diese Instanzen. Verwenden Sie eine dedizierte Cluster-CA und für jede Instanz ein eigenes Zertifikat mit eigenem Schlüssel. Das Zertifikat muss die IP-Adresse der Instanz im SAN enthalten und sowohl Server- als auch Clientauthentifizierung erlauben. Pfade sind relativ zur JSON-Datei. Schützen Sie die CA- und TLS-Dateien und bewahren Sie den privaten Schlüssel der CA offline auf. Gegenseitiges TLS authentifiziert die Instanzen. Es werden nur temporäre TXT-Werte repliziert, niemals HTTPS-Zertifikate, private Schlüssel oder die CA des lokalen Modus. Die entsprechenden Umgebungsvariablen heißen `DNSBOX_NAMESERVERS` und `DNSBOX_CLUSTER_FILE`.
+
+## ALIAS-Datensätze am Zonen-Apex
+
+Um den Zonen-Apex auf den Hostnamen eines externen Hostinganbieters zu verweisen, tragen Sie Folgendes in die mit `--records-file` ausgewählte Datei ein:
+
+```text
+apps.example.com ALIAS landing.example.net.
+```
+
+Konfigurieren Sie den Hostinganbieter so, dass er Ihre Apex-Domain und HTTPS bedient. DNSBox löst das Ziel auf, bevor der DNS-Dienst bereit wird, aktualisiert es im Hintergrund und antwortet mit zwischengespeicherten A-/AAAA-Datensätzen, ohne beim Bearbeiten einer Anfrage eine Auflösung durchzuführen. Schlägt die erste Auflösung fehl, wird der Start abgebrochen. Ist der Cache älter als eine Stunde, erhalten A-/AAAA-Anfragen SERVFAIL. ALIAS ist nur am Apex erlaubt, muss auf einen Namen außerhalb der Zone zeigen und darf dort nicht neben A, AAAA oder CNAME stehen. NS, SOA, TXT, MX und IP-basierte Proxy-Hostnamen bleiben verfügbar. Statische Nameserverlisten, TXT-Replikation im Cluster und ALIAS setzen v0.5.2 oder neuer voraus.
+
 ## Sicherheit und Kompatibilität
 
 Standardmäßig sind nur öffentliche Backend-Adressen zugelassen. Eine explizite Liste mit `--allowed-cidrs` beschränkt den Zugriff auf diese Netzwerke und ermöglicht damit private Bereitstellungen. Binden Sie eine private Installation nur an LAN-Schnittstellen und betreiben Sie sie hinter Ihrer Firewall.
 
-Die Verwaltungs-API verwendet standardmäßig `127.0.0.1:8080`. Änderungen an Datensätzen erfordern ein konfiguriertes Bearer-Token; ein leeres `--api-listen=` deaktiviert die API. Die bisherigen Endpunkte zum nicht authentifizierten Austausch von Zertifikaten wurden entfernt. v0.5 unterstützt **eine einzelne DNSBox-Instanz pro Zone**. Die Synchronisierung von Zertifikaten und Validierungsdaten zwischen mehreren Instanzen wird nicht unterstützt.
+Die Verwaltungs-API verwendet standardmäßig `127.0.0.1:8080`. Änderungen an Datensätzen erfordern ein konfiguriertes Bearer-Token; ein leeres `--api-listen=` deaktiviert die API. Die bisherigen Endpunkte zum nicht authentifizierten Austausch von Zertifikaten wurden entfernt. Jede Instanz verwaltet ihren eigenen Zertifikatsspeicher.
 
 Zertifikate und private Schlüssel werden dauerhaft im Datenverzeichnis gespeichert. Sichern Sie dieses Verzeichnis auf sichere Weise. Die Dateien `certs/<hostname>.crt` und `.key` können von einem anderen Dienst wie ocserv verwendet werden. Der HTTP-Reverse-Proxy von DNSBox ist jedoch kein OpenConnect-/DTLS-Proxy. Lesen Sie die [Anleitung zum Zertifikatsexport](deployment.md#certificates-for-ocserv-or-another-service).
 
