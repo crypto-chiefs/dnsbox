@@ -1,157 +1,220 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
 
-# Parse args
-FORCE_RESOLV=0
+VERSION=v0.5.0
+INSTALL_DIR="${HOME:?HOME must be set}/.dnsbox"
+USE_SYSTEMD=auto
 IP=""
 DOMAIN=""
-NS_NAME=""
-DEBUG=0
+NS_NAME=ns1
+TLS_MODE=acme
+ALLOWED_CIDRS=""
+DATA_DIR=""
+DNS_LISTEN=:53
+HTTPS_LISTEN=:443
+API_LISTEN=127.0.0.1:8080
+UPSTREAM_PORT=80
+ACME_EMAIL=""
+ACME_DIRECTORY=https://acme-v02.api.letsencrypt.org/directory
+DEBUG=false
+
+usage() {
+  cat <<'EOF'
+Usage: bash install.sh --ip=ADDRESS --domain=ZONE [options]
+  --version=v0.5.0              Release to download (never mixes release files)
+  --install-dir=PATH            Installation directory (default ~/.dnsbox)
+  --ns=ns1                     Nameserver label
+  --tls-mode=acme|local         Public ACME or private local CA
+  --allowed-cidrs=LIST          Comma-separated allowed backend networks
+  --data-dir=PATH               Persistent data (default INSTALL_DIR/data)
+  --dns-listen=ADDRESS:PORT     DNS UDP and TCP listener (default :53)
+  --https-listen=ADDRESS:PORT   HTTPS listener (default :443)
+  --api-listen=ADDRESS:PORT     Management listener (default 127.0.0.1:8080)
+  --upstream-port=PORT          Backend HTTP port (default 80)
+  --acme-email=EMAIL            ACME account contact
+  --acme-directory=URL          ACME directory, e.g. staging
+  --systemd | --no-systemd      Force service or manual installation
+  --debug                      Enable debug logging
+  --help
+Existing dnsbox.env is preserved. Edit it to change an existing installation.
+The installer never changes the machine's DNS resolver or firewall.
+EOF
+}
+die() { printf '%s\n' "$*" >&2; exit 1; }
 
 for arg in "$@"; do
-  case $arg in
-    --force-resolv) FORCE_RESOLV=1 ;;
-    --ip=*) IP="${arg#*=}" ;;
-    --domain=*) DOMAIN="${arg#*=}" ;;
-    --ns=*) NS_NAME="${arg#*=}" ;;
-    --debug) DEBUG=1 ;;
+  case "$arg" in
+    --ip=*) IP=${arg#*=} ;;
+    --domain=*) DOMAIN=${arg#*=} ;;
+    --ns=*) NS_NAME=${arg#*=} ;;
+    --version=*) VERSION=${arg#*=} ;;
+    --install-dir=*) INSTALL_DIR=${arg#*=} ;;
+    --tls-mode=*) TLS_MODE=${arg#*=} ;;
+    --allowed-cidrs=*) ALLOWED_CIDRS=${arg#*=} ;;
+    --data-dir=*) DATA_DIR=${arg#*=} ;;
+    --dns-listen=*) DNS_LISTEN=${arg#*=} ;;
+    --https-listen=*) HTTPS_LISTEN=${arg#*=} ;;
+    --api-listen=*) API_LISTEN=${arg#*=} ;;
+    --upstream-port=*) UPSTREAM_PORT=${arg#*=} ;;
+    --acme-email=*) ACME_EMAIL=${arg#*=} ;;
+    --acme-directory=*) ACME_DIRECTORY=${arg#*=} ;;
+    --systemd) USE_SYSTEMD=yes ;;
+    --no-systemd) USE_SYSTEMD=no ;;
+    --debug) DEBUG=true ;;
+    --help|-h) usage; exit 0 ;;
+    --force-resolv) die '--force-resolv was removed. Bind DNSBox to a free interface with --dns-listen instead.' ;;
+    *) die "Unknown option: $arg" ;;
   esac
 done
 
-if [[ -z "$IP" || -z "$DOMAIN" || -z "$NS_NAME" ]]; then
-  echo -e "\033[0;31m❌ Missing --ip or --domain or --ns.\033[0m"
-  echo ""
-  echo "👉 Example usage:"
-  echo -e "   \033[1;36mbash <(curl -sSL https://raw.githubusercontent.com/crypto-chiefs/dnsbox/main/scripts/install.sh) --ip=167.172.5.205 --domain=dnsbox.io --ns=ns3\033[0m"
-  exit 1
-fi
+[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][a-zA-Z0-9.-]+)?$ ]] || die 'Invalid release version'
+[[ "$INSTALL_DIR" = /* && "$INSTALL_DIR" != / ]] || die '--install-dir must be an absolute directory other than /'
+DATA_DIR=${DATA_DIR:-"$INSTALL_DIR/data"}
+[[ "$DATA_DIR" = /* && "$DATA_DIR" != / ]] || die '--data-dir must be an absolute directory other than /'
 
-# Detect sudo or root
-if [[ $EUID -eq 0 ]]; then
-  SUDO=""
+for cmd in curl tar awk mktemp; do command -v "$cmd" >/dev/null || die "Required command not found: $cmd"; done
+if command -v sha256sum >/dev/null; then
+  HASH=(sha256sum)
+elif command -v shasum >/dev/null; then
+  HASH=(shasum -a 256)
 else
-  SUDO="sudo"
+  die 'sha256sum or shasum is required to verify the download'
 fi
 
-CURRENT_USER=$(logname 2>/dev/null || echo $SUDO_USER || echo $USER)
-
-# Check port 53
-if lsof -i :53 &>/dev/null; then
-  if [[ "$FORCE_RESOLV" -eq 1 ]]; then
-    echo -e "\033[1;33m⚠️ Port 53 is in use. Attempting to fix via --force-resolv...\033[0m"
-
-    if systemctl list-units --type=service | grep -q systemd-resolved.service; then
-      echo "🛑 Disabling systemd-resolved..."
-      $SUDO systemctl stop systemd-resolved || true
-      $SUDO systemctl disable systemd-resolved || true
-    else
-      echo "ℹ️ systemd-resolved not found — skipping"
-    fi
-
-    $SUDO rm -f /etc/resolv.conf
-    echo "nameserver 8.8.8.8" | $SUDO tee /etc/resolv.conf
-    echo -e "\033[1;32m✅ fallback DNS set to 8.8.8.8\033[0m"
-  else
-    echo -e "\033[0;31m❌ Port 53 is already in use. DNSBox requires port 53 for UDP and TCP.\033[0m"
-    echo ""
-    lsof -i :53 | awk 'NR==1 || /LISTEN/'
-    echo ""
-    echo "👉 Re-run with \033[1;36m--force-resolv\033[0m to automatically disable systemd-resolved"
-    echo "🚫 Aborting installation."
-    exit 1
-  fi
-fi
-
-# Setup
-REPO="crypto-chiefs/dnsbox"
-SERVICE_NAME="dnsbox"
-ARCHIVE_PREFIX="dnsbox"
-BIN_NAME="dnsboxd"
-INSTALL_DIR="$HOME/.dnsbox"
-
-UNAME=$(uname | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m)
-
-case "$ARCH" in
-  x86_64) ARCH="amd64" ;;
-  aarch64 | arm64) ARCH="arm64" ;;
-  *) echo "❌ Unsupported architecture: $ARCH" && exit 1 ;;
+case "$(uname -s)" in
+  Linux) GOOS=linux ;;
+  Darwin) GOOS=darwin ;;
+  *) die 'This installer supports Linux and macOS. Download the Windows release manually.' ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64) GOARCH=amd64 ;;
+  aarch64|arm64) GOARCH=arm64 ;;
+  *) die 'Supported architectures: amd64, arm64' ;;
 esac
 
-case "$UNAME" in
-  linux|darwin) GOOS="$UNAME" ;;
-  msys*|mingw*|cygwin*) GOOS="windows" ;;
-  *) echo "❌ Unsupported OS: $UNAME" && exit 1 ;;
-esac
-
-ARCHIVE_NAME="$ARCHIVE_PREFIX-$GOOS-$ARCH.tar.gz"
-RELEASE_URL="https://github.com/$REPO/releases/latest/download/$ARCHIVE_NAME"
-UNIT_URL="https://raw.githubusercontent.com/$REPO/main/systemd/dnsbox.service"
-
-echo "🌀 Installing $BIN_NAME for $GOOS/$ARCH from $RELEASE_URL"
-
-mkdir -p "$INSTALL_DIR"
-cd "$INSTALL_DIR"
-curl -L "$RELEASE_URL" | tar -xz
-chmod +x "$BIN_NAME"
-
-# Ensure cert storage dir exists with proper permissions
-CERT_DIR="/var/lib/dnsbox/certs"
-
-if [[ -d "$CERT_DIR" ]]; then
-  echo "📁 Found existing cert directory: $CERT_DIR"
-  PERMS=$(stat -c "%a" "$CERT_DIR")
-  OWNER=$(stat -c "%U" "$CERT_DIR")
-  if [[ "$PERMS" != "700" || "$OWNER" != "$CURRENT_USER" ]]; then
-    echo "🔒 Fixing permissions for $CERT_DIR"
-    $SUDO chown -R "$CURRENT_USER:$CURRENT_USER" "$CERT_DIR"
-    $SUDO chmod -R 700 "$CERT_DIR"
+if [[ "$USE_SYSTEMD" = auto ]]; then
+  USE_SYSTEMD=no
+  if [[ "$GOOS" = linux && -d /run/systemd/system ]] && command -v systemctl >/dev/null; then
+    USE_SYSTEMD=yes
   fi
+fi
+SUDO=()
+if [[ "$USE_SYSTEMD" = yes ]]; then
+  [[ "$GOOS" = linux && -d /run/systemd/system ]] || die 'systemd is not running; use --no-systemd'
+  command -v systemctl >/dev/null || die 'systemctl is required'
+  if [[ $EUID -ne 0 ]]; then
+    command -v sudo >/dev/null || die 'sudo is required to install a system service'
+    SUDO=(sudo)
+    sudo -v
+  fi
+  # systemd expands percent specifiers even inside quoted paths.
+  [[ "$INSTALL_DIR" != *'%'* && "$INSTALL_DIR" != *'"'* && "$INSTALL_DIR" != *\\* ]] || die 'Unsupported character in systemd installation path'
+fi
+
+TASK_TMP=$(mktemp -d)
+trap 'rm -rf -- "$TASK_TMP"' EXIT
+ENV_FILE="$INSTALL_DIR/dnsbox.env"
+if [[ -f "$ENV_FILE" ]]; then
+  cp -- "$ENV_FILE" "$TASK_TMP/dnsbox.env"
+  printf 'Preserving existing configuration: %s\n' "$ENV_FILE"
 else
-  echo "📁 Creating cert directory: $CERT_DIR"
-  $SUDO mkdir -p "$CERT_DIR"
-  $SUDO chown -R "$CURRENT_USER:$CURRENT_USER" "$CERT_DIR"
-  $SUDO chmod -R 700 "$CERT_DIR"
-  echo "✅ Created and secured $CERT_DIR"
+  [[ -n "$IP" && -n "$DOMAIN" ]] || die '--ip and --domain are required for a new installation'
+  # Single-quoted values work in both a POSIX shell and systemd EnvironmentFile.
+  write_env() {
+    [[ "$2" != *"'"* && "$2" != *$'\n'* && "$2" != *$'\r'* ]] || die "Invalid character in $1"
+    printf "%s='%s'\n" "$1" "$2" >> "$TASK_TMP/dnsbox.env"
+  }
+  write_env DNSBOX_IP "$IP"
+  write_env DNSBOX_DOMAIN "$DOMAIN"
+  write_env DNSBOX_NS_NAME "$NS_NAME"
+  write_env DNSBOX_TLS_MODE "$TLS_MODE"
+  write_env DNSBOX_ALLOWED_CIDRS "$ALLOWED_CIDRS"
+  write_env DNSBOX_DATA_DIR "$DATA_DIR"
+  write_env DNSBOX_DNS_LISTEN "$DNS_LISTEN"
+  write_env DNSBOX_HTTPS_LISTEN "$HTTPS_LISTEN"
+  write_env DNSBOX_API_LISTEN "$API_LISTEN"
+  write_env DNSBOX_UPSTREAM_PORT "$UPSTREAM_PORT"
+  write_env DNSBOX_ACME_EMAIL "$ACME_EMAIL"
+  write_env DNSBOX_ACME_DIRECTORY "$ACME_DIRECTORY"
+  write_env DNSBOX_DEBUG "$DEBUG"
 fi
 
-# Prepare debug env (default: off)
-DEBUG_ENV_LINE=""
-if [[ "$DEBUG" -eq 1 ]]; then
-  echo "🛠️ Debug mode enabled"
-  DEBUG_ENV_LINE="DNSBOX_DEBUG=true"
-fi
+ARCHIVE="dnsbox-$GOOS-$GOARCH.tar.gz"
+RELEASE_URL="https://github.com/crypto-chiefs/dnsbox/releases/download/$VERSION"
+printf 'Downloading DNSBox %s for %s/%s\n' "$VERSION" "$GOOS" "$GOARCH"
+curl --fail --show-error --silent --location --retry 3 --proto '=https' --tlsv1.2 "$RELEASE_URL/$ARCHIVE" -o "$TASK_TMP/$ARCHIVE"
+curl --fail --show-error --silent --location --retry 3 --proto '=https' --tlsv1.2 "$RELEASE_URL/checksums.txt" -o "$TASK_TMP/checksums.txt"
+EXPECTED=$(awk -v file="$ARCHIVE" '$2 == file {print $1}' "$TASK_TMP/checksums.txt")
+[[ "$EXPECTED" =~ ^[a-fA-F0-9]{64}$ ]] || die 'Missing or ambiguous archive checksum'
+ACTUAL=$("${HASH[@]}" "$TASK_TMP/$ARCHIVE" | awk '{print $1}')
+[[ "$EXPECTED" = "$ACTUAL" ]] || die 'Archive checksum does not match; installation stopped'
+# Extract only the binary; archive paths and bundled scripts cannot overwrite files.
+tar -xzf "$TASK_TMP/$ARCHIVE" -C "$TASK_TMP" dnsboxd
+[[ -f "$TASK_TMP/dnsboxd" && ! -L "$TASK_TMP/dnsboxd" ]] || die 'Archive did not contain a regular dnsboxd binary'
+chmod 755 "$TASK_TMP/dnsboxd"
+(
+  set -a
+  # Existing configuration is user-controlled, just like the launcher configuration.
+  # shellcheck disable=SC1091
+  . "$TASK_TMP/dnsbox.env"
+  set +a
+  "$TASK_TMP/dnsboxd" --check-config
+)
 
-if [[ "$GOOS" == "linux" ]]; then
-  echo "⚙️ Setting up systemd..."
+mkdir -p -- "$INSTALL_DIR"
+chmod 700 "$INSTALL_DIR"
+cp -- "$TASK_TMP/dnsboxd" "$INSTALL_DIR/dnsboxd.new"
+chmod 755 "$INSTALL_DIR/dnsboxd.new"
+mv -f -- "$INSTALL_DIR/dnsboxd.new" "$INSTALL_DIR/dnsboxd"
+if [[ ! -f "$ENV_FILE" ]]; then cp -- "$TASK_TMP/dnsbox.env" "$ENV_FILE"; fi
+chmod 600 "$ENV_FILE"
+cat > "$INSTALL_DIR/run-dnsbox" <<'EOF'
+#!/bin/sh
+set -eu
+INSTALL_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+set -a
+. "$INSTALL_DIR/dnsbox.env"
+set +a
+exec "$INSTALL_DIR/dnsboxd" "$@"
+EOF
+chmod 755 "$INSTALL_DIR/run-dnsbox"
 
-  SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
-  TMP_UNIT="/tmp/$SERVICE_NAME.service"
+if [[ "$USE_SYSTEMD" = yes ]]; then
+  SERVICE_USER=$(id -un)
+  [[ "$SERVICE_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || die 'Unsupported service user name'
+  cat > "$TASK_TMP/dnsbox.service" <<EOF
+[Unit]
+Description=DNSBox DNS and HTTPS server
+After=network-online.target
+Wants=network-online.target
 
-  echo "📥 Downloading unit template..."
-  curl -sL "$UNIT_URL" -o "$TMP_UNIT"
+[Service]
+Type=simple
+User=$SERVICE_USER
+ExecStart="$INSTALL_DIR/run-dnsbox"
+WorkingDirectory="$INSTALL_DIR"
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
 
-  echo "🔧 Replacing placeholders..."
-  BIN_ABS_PATH="$INSTALL_DIR/$BIN_NAME"
-  WORKDIR="$INSTALL_DIR"
-
-  $SUDO sed -e "s|{{BIN_PATH}}|$BIN_ABS_PATH|g" \
-            -e "s|{{WORKDIR}}|$WORKDIR|g" \
-            -e "s|{{USER}}|$CURRENT_USER|g" \
-            -e "s|{{IP}}|$IP|g" \
-            -e "s|{{DOMAIN}}|$DOMAIN|g" \
-            -e "s|{{NS_NAME}}|$NS_NAME|g" \
-            -e "s|{{DEBUG_ENV}}|$DEBUG_ENV_LINE|g" \
-            "$TMP_UNIT" | $SUDO tee "$SERVICE_FILE" > /dev/null
-
-  echo "✅ Unit installed: $SERVICE_FILE"
-
-  $SUDO systemctl daemon-reexec
-  $SUDO systemctl daemon-reload
-  $SUDO systemctl enable $SERVICE_NAME
-  $SUDO systemctl restart $SERVICE_NAME
-
-  echo "📦 DNSBox started: systemctl status $SERVICE_NAME"
+[Install]
+WantedBy=multi-user.target
+EOF
+  "${SUDO[@]}" install -m 644 "$TASK_TMP/dnsbox.service" /etc/systemd/system/dnsbox.service
+  "${SUDO[@]}" systemctl daemon-reload
+  "${SUDO[@]}" systemctl enable dnsbox.service
+  "${SUDO[@]}" systemctl restart dnsbox.service
+  "${SUDO[@]}" systemctl is-active --quiet dnsbox.service
+  printf 'DNSBox service started. Logs: journalctl -u dnsbox.service\n'
 else
-  echo "🍎 Manual run: $INSTALL_DIR/$BIN_NAME"
+  printf 'Installed. Start manually: %q/run-dnsbox\n' "$INSTALL_DIR"
+  printf 'Ports below 1024 require appropriate privileges; alternatively configure high listener ports.\n'
 fi
+printf 'Configuration: %s\nData directory is configured by DNSBOX_DATA_DIR in this file.\n' "$ENV_FILE"

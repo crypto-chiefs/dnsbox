@@ -3,6 +3,7 @@ package logger
 import (
 	"log"
 	"os"
+	"sync/atomic"
 )
 
 type LogLevel int
@@ -13,7 +14,7 @@ const (
 )
 
 var (
-	currentLevel  LogLevel = INFO
+	currentLevel  atomic.Int32
 	infoLogger    *log.Logger
 	errorLogger   *log.Logger
 	warningLogger *log.Logger
@@ -28,23 +29,25 @@ func init() {
 // SetDebugMode enables or disables debug logging.
 func SetDebugMode(enabled bool) {
 	if enabled {
-		currentLevel = DEBUG
+		currentLevel.Store(int32(DEBUG))
+	} else {
+		currentLevel.Store(int32(INFO))
 	}
 }
 
 // SetLogLevel explicitly sets the log level.
 func SetLogLevel(level LogLevel) {
-	currentLevel = level
+	currentLevel.Store(int32(level))
 }
 
 func Debug(format string, v ...any) {
-	if currentLevel >= DEBUG {
+	if currentLevel.Load() >= int32(DEBUG) {
 		infoLogger.Printf("[DEBUG] "+format, v...)
 	}
 }
 
 func Info(format string, v ...any) {
-	if currentLevel >= INFO {
+	if currentLevel.Load() >= int32(INFO) {
 		infoLogger.Printf("[INFO] "+format, v...)
 	}
 }

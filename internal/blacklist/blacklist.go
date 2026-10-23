@@ -6,6 +6,7 @@ import (
 	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"net"
 	"strings"
+	"sync"
 )
 
 //go:embed blacklist.txt
@@ -14,14 +15,14 @@ var rawBlacklist embed.FS
 var (
 	exactIPs   = map[string]struct{}{}
 	cidrBlocks []*net.IPNet
-	loaded     bool
+	loadOnce   sync.Once
 )
 
 func LoadEmbedded() {
-	if loaded {
-		return
-	}
-	loaded = true
+	loadOnce.Do(loadEmbedded)
+}
+
+func loadEmbedded() {
 
 	file, err := rawBlacklist.Open("blacklist.txt")
 	if err != nil {
@@ -58,9 +59,7 @@ func LoadEmbedded() {
 }
 
 func IsBlocked(ipStr string) bool {
-	if !loaded {
-		LoadEmbedded()
-	}
+	LoadEmbedded()
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
 		return false

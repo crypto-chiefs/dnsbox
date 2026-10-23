@@ -1,16 +1,14 @@
 module github.com/crypto-chiefs/dnsbox
 
-go 1.22.0
+go 1.27.3
 
 require (
-	github.com/miekg/dns v1.1.64
-	golang.org/x/crypto v0.33.0
+	github.com/gofrs/flock v0.13.1
+	github.com/miekg/dns v1.1.73
+	golang.org/x/crypto v0.58.0
 )
 
 require (
-	golang.org/x/mod v0.23.0 // indirect
-	golang.org/x/net v0.35.0 // indirect
-	golang.org/x/sync v0.11.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
-	golang.org/x/tools v0.30.0 // indirect
+	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 )

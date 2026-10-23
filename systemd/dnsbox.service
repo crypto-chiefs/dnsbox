@@ -1,22 +1,27 @@
 [Unit]
-Description=DNSBox DNS Server
-After=network.target
+Description=DNSBox DNS and HTTPS server
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-User={{USER}}
-ExecStart={{BIN_PATH}}
-WorkingDirectory={{WORKDIR}}
-Restart=always
+Type=simple
+# Create this service account and grant it ownership of /var/lib/dnsbox first.
+User=dnsbox
+Group=dnsbox
+ExecStart=/usr/local/bin/dnsboxd
+EnvironmentFile=/etc/dnsbox/dnsbox.env
+WorkingDirectory=/var/lib/dnsbox
+Restart=on-failure
 RestartSec=5
-
+TimeoutStopSec=20
+UMask=0077
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-
-Environment=DNSBOX_IP={{IP}}
-Environment=DNSBOX_DOMAIN={{DOMAIN}}
-Environment=DNSBOX_NS_NAME={{NS_NAME}}
-Environment=DNSBOX_DEBUG={{DEBUG_ENV}}
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dnsbox
 
 [Install]
 WantedBy=multi-user.target

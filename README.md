@@ -1,114 +1,97 @@
-# DNSBox — HTTPS and Let's Encrypt for Any IP Address
+# DNSBox — self-hosted DNS and HTTPS for IP-based hostnames
 
-[🇬🇧 English](README.md) | [🇷🇺 Русский](/doc/README.ru.md) | [🇪🇸 Español](/doc/README.es.md) | [🇩🇪 Deutsch](/doc/README.de.md) | [🇫🇷 Français](/doc/README.fr.md) | [🇨🇳 中文](/doc/README.zh.md) | [🇮🇳 हिंदी](/doc/README.hi.md) | [🇧🇷 Português](/doc/README.pt.md) | [🇹🇷 Türkçe](/doc/README.tr.md) | [🇮🇩 Bahasa Indonesia](/doc/README.id.md) | [🇻🇳 Tiếng Việt](/doc/README.vi.md) | [🇰🇷 한국어](/doc/README.ko.md)
+[Русский](doc/README.ru.md) · [Deployment and private networks](doc/deployment.md) · [Configuration](doc/configuration.md) · [Upgrade notes](doc/migration-v0.5.md)
 
-[![Release](https://img.shields.io/github/v/release/crypto-chiefs/dnsbox)](https://github.com/crypto-chiefs/dnsbox/releases)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/crypto-chiefs/dnsbox)](go.mod)
+DNSBox combines an authoritative DNS server with an HTTPS reverse proxy. A hostname such as `192-168-1-50.home.arpa` identifies a backend IP. DNS answers point to **the DNSBox proxy**, which terminates TLS and forwards HTTP to that backend. It supports dotted/dashed IPv4, dashed IPv6, WebSocket upgrades, and persistent certificates.
 
-**DNSBox** is an open-source DNS server that allows you to issue free SSL certificates (Let's Encrypt) for any public IP address (IPv4 and IPv6) without owning a domain. Get HTTPS access to a server, API, or IoT device directly by IP.
+Two TLS modes are available:
 
----
+- **`acme`**: certificates for hostnames in a domain you control, using ACME DNS-01 (Let's Encrypt by default). Your authoritative DNS must be publicly reachable.
+- **`local`**: a persistent local CA for private networks, without public DNS, Internet access, or port forwarding. Clients must trust the generated CA.
 
-## 🔍 Features
+Certificates cover DNS hostnames, not bare IP addresses. Running the software does not grant control of `dnsbox.io`. The availability or configuration of the public `dnsbox.io` service is independent of this repository.
 
-- 🔐 **Free SSL certificates** from Let's Encrypt for IP addresses
-- 🌐 **Supports IPv4 and IPv6**
-- ⚡ **Instant HTTPS access** without DNS configuration
-- 🔄 **Automatic certificate renewal**
-- 💡 **Works without a domain** — use `*.dnsbox.io` subdomains
-- 🧩 **Compatible with WebSocket, APIs, and CI/CD pipelines**
-- ⚙️ **Lightweight installer** via shell script
-- 📦 Minimal dependencies, single binary, zero-config launch
+## Private network quick start
 
----
+Example: DNSBox VM `192.168.1.2`, HTTP application `192.168.1.50:80`, private zone `home.arpa`.
 
-## 📦 Installation
+Download the appropriate [release archive](https://github.com/crypto-chiefs/dnsbox/releases), verify it against `checksums.txt`, and run:
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/crypto-chiefs/dnsbox/main/scripts/install.sh) --ip=167.172.5.205 --domain=dnsbox.io --ns=ns3
+./dnsboxd \
+  --domain=home.arpa --ip=192.168.1.2 --ns=ns1 \
+  --tls-mode=local --allowed-cidrs=192.168.1.0/24 \
+  --dns-listen=192.168.1.2:53 --https-listen=192.168.1.2:443 \
+  --data-dir=/var/lib/dnsbox
 ```
 
-Parameters:
-- `--ip` — your public IP address (required)
-- `--domain` — the root domain bound to the NS (e.g., `dnsbox.io`)
-- `--ns` — nameserver subdomain (e.g., `ns3`)
-- `--force-resolv` — disables systemd-resolved and sets 8.8.8.8
-- `--debug` — enables verbose output
+The process needs write access to the data directory and permission to bind these ports. Configure your LAN resolver to forward **the `home.arpa` zone** to `192.168.1.2`; DNSBox does not provide general recursive DNS.
 
----
-
-## 🌐 How It Works
-
-1. DNSBox launches a nameserver that serves A/AAAA and TXT records on the fly.
-2. You get a subdomain like `167.172.5.205.dnsbox.io`.
-3. Let's Encrypt checks for a `_acme-challenge` TXT record and issues a certificate.
-4. DNSBox automatically stores, renews, and serves the SSL certificate.
-
----
-
-## 🛠 Example Usage
-
-After installation, you can connect to your server over HTTPS:
+On the first certificate request, DNSBox creates `/var/lib/dnsbox/ca/root.crt` and its private key. Copy **only `root.crt`** securely to clients and install it in their trusted CA store. For a single command, test with:
 
 ```bash
-curl https://167.172.5.205.dnsbox.io
+curl --cacert root.crt \
+  --resolve 192-168-1-50.home.arpa:443:192.168.1.2 \
+  https://192-168-1-50.home.arpa/
 ```
 
-Or test the SSL via OpenSSL:
+You can create the CA and a leaf before starting the service with the same configuration plus `--issue=192-168-1-50.home.arpa`. In local mode this writes the certificate and exits without opening listeners. See the [private deployment guide](doc/deployment.md).
+
+## Installation
+
+Linux and macOS installer (pinned to the release):
 
 ```bash
-openssl s_client -connect 167.172.5.205:443 -servername 167.172.5.205.dnsbox.io
+curl --fail --location \
+  https://raw.githubusercontent.com/crypto-chiefs/dnsbox/v0.5.0/scripts/install.sh \
+  -o install-dnsbox.sh
+# Review the script, then:
+bash install-dnsbox.sh \
+  --domain=home.arpa --ip=192.168.1.2 \
+  --tls-mode=local --allowed-cidrs=192.168.1.0/24 \
+  --dns-listen=192.168.1.2:53 --https-listen=192.168.1.2:443
 ```
 
----
+The installer verifies the archive's SHA-256 checksum, installs into `~/.dnsbox`, and uses `~/.dnsbox/data` for persistent data on a new installation. It creates a systemd service only when systemd is running. Use `--no-systemd` for manual startup, including Calculate Linux/OpenRC:
 
-## ⚙️ Under the Hood
+```bash
+~/.dnsbox/run-dnsbox
+```
 
-- Language: Go
-- DNS Library: [miekg/dns](https://github.com/miekg/dns)
-- TLS: standard `crypto/tls`
-- ACME Client: built-in ACME support (no certbot)
-- On-the-fly logic: all DNS queries and challenges are handled in memory
+The generated `~/.dnsbox/dnsbox.env` stores configuration and is preserved on upgrades. Re-running the installer upgrades binaries; edit the existing environment file to change settings. Neither installer nor uninstaller changes your system resolver or deletes system logs. On Windows, extract the archive and run `dnsboxd.exe` with the same flags.
 
----
+## Public certificates and NAT
 
-## 🧪 Use Cases
+For ACME mode, delegate a domain or subdomain **you control** to your DNSBox authoritative server. Supply public glue/address records for its nameserver as necessary. Forward **both UDP and TCP port 53** to DNSBox. Allow outbound HTTPS for ACME.
 
-- 🔧 DevOps infrastructure without domains
-- 📡 IoT devices with public IPs
-- 🧪 Lab/staging environments
-- 🚀 Fast API deployment without DNS
-- 🔐 VPN/Proxy services requiring HTTPS
+DNS-01 does **not** need incoming port 80. Port 443 only needs to be reachable by clients using the HTTPS proxy. The HTTP backend can remain private: allow its network with `--allowed-cidrs`. A completely isolated network must use local TLS mode instead.
 
----
+```bash
+./dnsboxd --domain=apps.example.com --ip=203.0.113.10 --ns=ns1 \
+  --acme-email=admin@example.com --data-dir=/var/lib/dnsbox
+```
 
-## 🔒 Security
+Replace example names and addresses with your own. `--ip` is the address clients use to reach DNSBox, not the backend address. An IPv4 proxy returns A records; an IPv6 proxy returns AAAA records, regardless of the backend's IP family.
 
-All Let's Encrypt challenge requests are served only during valid IP validation. TLS private keys are stored in `/var/lib/dnsbox/certs`.
+## Security and compatibility
 
----
+By default only public backend addresses are allowed. An explicit `--allowed-cidrs` list restricts access to those networks, enabling private deployments. Keep a private deployment bound to LAN interfaces and behind your firewall.
 
-## 🗺 Alternative to sslip.io and nip.io
+The management API defaults to `127.0.0.1:8080`. Record mutations require a configured bearer token, and an empty `--api-listen=` disables it. The old unauthenticated certificate-sharing endpoints have been removed. v0.5 supports a **single DNSBox instance per zone**; multi-node certificate/challenge synchronization is not supported.
 
-Unlike existing services:
-- DNSBox is a **self-hosted open-source solution**
-- Deploy your own `*.yourdomain.tld`
-- Supports **IPv6**, ACME, and certificates **without third-party APIs**
+Certificates and private keys persist under the data directory. Back up that directory securely. The `certs/<hostname>.crt` and `.key` files can be used by another service, such as ocserv, but DNSBox's HTTP reverse proxy is not an OpenConnect/DTLS proxy. See [certificate export instructions](doc/deployment.md#certificates-for-ocserv-or-another-service).
 
----
+Read the [v0.5 migration notes](doc/migration-v0.5.md) before upgrading from v0.4.
 
-## 📜 License
+## Development
 
-This project is licensed under the MIT License. Use it freely, fork it, extend it.
+Use the Go version declared in [go.mod](go.mod).
 
----
+```bash
+go test -race ./...
+go vet ./...
+bash scripts/test-install.sh
+go build ./cmd/dnsboxd
+```
 
-## 🔗 Useful Links
-
-- 🌍 Project website: https://dnsbox.io/
-- 📦 Installer: [install.sh](https://github.com/crypto-chiefs/dnsbox/blob/main/scripts/install.sh)
-- 📖 Documentation: in progress
-
----
-
-⭐ If you find this project useful, please star it on GitHub!
+Release CI runs the checks before publishing Linux, macOS, and Windows archives for amd64 and arm64. [MIT license](LICENSE).

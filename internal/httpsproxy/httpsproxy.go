@@ -1,192 +1,102 @@
 package httpsproxy
 
 import (
+	"context"
 	"crypto/tls"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"github.com/crypto-chiefs/dnsbox/internal/blacklist"
-	"github.com/crypto-chiefs/dnsbox/internal/config"
-	"github.com/crypto-chiefs/dnsbox/internal/logger"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/crypto-chiefs/dnsbox/internal/certshare"
+	"github.com/crypto-chiefs/dnsbox/internal/config"
+	"github.com/crypto-chiefs/dnsbox/internal/httpserver"
 	"github.com/crypto-chiefs/dnsbox/internal/letsencrypt"
-	"github.com/crypto-chiefs/dnsbox/internal/utils"
+	"github.com/crypto-chiefs/dnsbox/internal/logger"
+	"github.com/crypto-chiefs/dnsbox/internal/resolver"
 )
 
-var (
-	certMu  sync.Mutex
-	certMap = make(map[string][]byte)
-)
-
-func StoreEncryptedCert(domain string, data []byte) {
-	certMu.Lock()
-	defer certMu.Unlock()
-	certMap[domain] = data
-}
-
-func extractIPFromDomain(host string) string {
-	host = strings.Split(host, ":")[0]
-	parts := strings.Split(host, ".")
-
-	if len(parts) < 5 {
-		return ""
-	}
-
-	if strings.Contains(parts[0], "-") {
-		ip := strings.ReplaceAll(parts[0], "-", ".")
-		if net.ParseIP(ip) != nil {
-			return ip
+func requestHostname(authority string) (string, error) {
+	if strings.Contains(authority, ":") {
+		host, port, err := net.SplitHostPort(authority)
+		if err != nil {
+			return "", err
 		}
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return "", &net.AddrError{Err: "invalid port", Addr: authority}
+		}
+		authority = host
 	}
-
-	ip := fmt.Sprintf("%s.%s.%s.%s", parts[0], parts[1], parts[2], parts[3])
-	if net.ParseIP(ip) != nil {
-		return ip
-	}
-
-	return ""
+	return config.ValidateHostname(authority)
 }
 
-func Start() error {
-	server := &http.Server{
-		Addr: ":443",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			scheme := "http"
-			if strings.EqualFold(r.Header.Get("Connection"), "Upgrade") &&
-				strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-				if r.TLS != nil {
-					scheme = "ws"
-				} else {
-					scheme = "ws"
-				}
-			}
-			ip := extractIPFromDomain(r.Host)
-			if net.ParseIP(ip) == nil {
-				http.Error(w, "Invalid target", http.StatusBadRequest)
-				return
-			}
+func Handler() http.Handler {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Traffic must go directly to the validated literal IP, never through an
+	// HTTP_PROXY from the service environment or another DNS lookup.
+	transport.Proxy = nil
+	transport.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 4
+	proxy := &httputil.ReverseProxy{
+		Transport: transport,
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			host, _ := requestHostname(pr.In.Host) // validated by the outer handler
+			ip, _ := resolver.ParseHost(host, config.Domain)
+			target := &url.URL{Scheme: "http", Host: net.JoinHostPort(ip.String(), strconv.Itoa(config.UpstreamPort))}
+			pr.SetURL(target)
+			pr.Out.Host = pr.In.Host
+			// ReverseProxy removes untrusted forwarding headers before Rewrite.
+			pr.Out.Header.Del("Forwarded")
+			pr.SetXForwarded()
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			logger.Warn("[httpsproxy] upstream request failed: %v", err)
+			http.Error(w, "upstream unavailable", http.StatusBadGateway)
+		},
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, err := requestHostname(r.Host)
+		if err != nil {
+			http.Error(w, "invalid or disallowed target", http.StatusForbidden)
+			return
+		}
+		if r.TLS == nil || !strings.EqualFold(strings.TrimSuffix(r.TLS.ServerName, "."), host) {
+			http.Error(w, "Host must match TLS server name", http.StatusMisdirectedRequest)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	})
+}
 
-			if blacklist.IsBlocked(ip) {
-				logger.Warn("[httpsproxy] ❌ Blocked request to blacklisted IP %s (%s)", ip, r.Host)
-				http.Error(w, "Blocked IP", http.StatusForbidden)
-				return
-			}
-
-			proxy := httputil.NewSingleHostReverseProxy(&url.URL{
-				Scheme: scheme,
-				Host:   ip,
-			})
-			proxy.ServeHTTP(w, r)
-		}),
+func Serve(ctx context.Context) error {
+	srv := &http.Server{
+		Addr: config.HTTPSListen, Handler: Handler(),
+		// TLS handshakes may include the initial ACME issuance; --issue permits
+		// provisioning before serving traffic. HTTP headers still have a bound.
+		ReadHeaderTimeout: config.ACMEDNSTimeout + 3*time.Minute,
+		IdleTimeout:       60 * time.Second, MaxHeaderBytes: 32 << 10,
 		TLSConfig: &tls.Config{
-			GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				domain := chi.ServerName
-				cert, err := fetchCertificate(domain)
+			MinVersion: tls.VersionTLS12,
+			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				name, err := config.ValidateHostname(hello.ServerName)
 				if err != nil {
-					logger.Error("[httpsproxy] failed to fetch cert for %s: %v", domain, err)
+					return nil, err
+				}
+				cert, err := letsencrypt.GetCertificate(hello.Context(), name)
+				if err != nil {
+					logger.Error("[httpsproxy] certificate for %s: %v", name, err)
 					return nil, err
 				}
 				return &cert, nil
 			},
-			MinVersion: tls.VersionTLS12,
 		},
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
 	}
-	logger.Info("[httpsproxy] listening on :443")
-	return server.ListenAndServeTLS("", "")
+	logger.Info("[httpsproxy] listening on %s", config.HTTPSListen)
+	return httpserver.Serve(ctx, srv, true)
 }
 
-func fetchCertificate(domain string) (tls.Certificate, error) {
-	if letsencrypt.HasCertificate(domain) {
-		return letsencrypt.LoadCertificate(domain)
-	}
-
-	priv, pub, err := certshare.GenerateEphemeralKeyPair()
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	pubB64 := base64.StdEncoding.EncodeToString(pub)
-	callback := "http://" + config.IP + ":80/.dnsbox/receive-cert"
-
-	peers, err := utils.DiscoverPeers()
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	req := certshare.AskRequest{
-		Domain:       domain,
-		FromIP:       config.IP,
-		EphemeralPub: pubB64,
-		Callback:     callback,
-	}
-
-	hasCertChan := make(chan bool, len(peers))
-	for _, peer := range peers {
-		peer := peer
-		go func() {
-			ok, err := certshare.SendAskRequest(peer.IP, req)
-			if err == nil && ok {
-				logger.Info("[httpsproxy] peer %s has cert", peer.IP)
-				hasCertChan <- true
-			} else {
-				hasCertChan <- false
-			}
-		}()
-	}
-
-	anyHasCert := false
-	for i := 0; i < len(peers); i++ {
-		if <-hasCertChan {
-			anyHasCert = true
-		}
-	}
-
-	if anyHasCert {
-		cert, err := waitForCertificate(domain, priv, 5*time.Second)
-		if err == nil {
-			return cert, nil
-		}
-		logger.Error("[httpsproxy] peer had cert but delivery failed: %v", err)
-	} else {
-		logger.Info("[httpsproxy] no peer has cert, generating via Let's Encrypt")
-	}
-
-	return letsencrypt.IssueCertificate(domain)
-}
-
-func waitForCertificate(domain string, priv []byte, timeout time.Duration) (tls.Certificate, error) {
-	start := time.Now()
-	for time.Since(start) < timeout {
-		certMu.Lock()
-		data, ok := certMap[domain]
-		if ok {
-			delete(certMap, domain)
-			certMu.Unlock()
-
-			decoded := make(map[string]string)
-			if err := json.Unmarshal(data, &decoded); err != nil {
-				return tls.Certificate{}, err
-			}
-			cipher, _ := base64.StdEncoding.DecodeString(decoded["encrypted"])
-			nonce, _ := base64.StdEncoding.DecodeString(decoded["nonce"])
-			cert, err := certshare.DecryptCertWithSharedKey(cipher, nonce, priv)
-			if err != nil {
-				return tls.Certificate{}, err
-			}
-			return cert, nil
-		}
-		certMu.Unlock()
-		time.Sleep(250 * time.Millisecond)
-	}
-	return tls.Certificate{}, fmt.Errorf("timeout waiting for cert")
-}
+func Start() error { return Serve(context.Background()) }

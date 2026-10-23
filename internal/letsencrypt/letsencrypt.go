@@ -1,218 +1,211 @@
+// Package letsencrypt manages on-demand ACME and private-network certificates.
 package letsencrypt
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
+	"errors"
 	"fmt"
-	"github.com/crypto-chiefs/dnsbox/internal/config"
-	"github.com/crypto-chiefs/dnsbox/internal/logger"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/crypto-chiefs/dnsbox/internal/txtstore"
-	"golang.org/x/crypto/acme"
+	"github.com/crypto-chiefs/dnsbox/internal/config"
+	"github.com/crypto-chiefs/dnsbox/internal/logger"
 )
 
-var cacheDir = "/var/lib/dnsbox/certs"
+// One issuer serializes account/CA initialization and renewal. Certificates
+// already on disk never wait for the issuer.
+var issuer = make(chan struct{}, 1)
+var pendingRequests = make(chan struct{}, 64)
+var failureMu sync.Mutex
+var failures = make(map[string]failure)
 
+type failure struct {
+	err   error
+	until time.Time
+}
+
+func cacheDirectory() string        { return filepath.Join(config.DataDir, "certs", config.TLSMode) }
+func cacheKey(domain string) string { return filepath.Join(cacheDirectory(), domain) }
+
+// GetCertificate validates ownership before accessing disk or contacting a CA.
+// Valid certificates stay available while the service-owned RenewCached worker
+// handles renewal. No detached goroutine can outlive the data-directory lock.
+func GetCertificate(ctx context.Context, domain string) (tls.Certificate, error) {
+	domain, err := config.ValidateHostname(domain)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	if cert, err := LoadCertificate(domain); err == nil {
+		return cert, nil
+	}
+	release, err := acquireIssuer(ctx)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	defer release()
+	return refreshLocked(ctx, domain)
+}
+
+func acquireIssuer(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case pendingRequests <- struct{}{}:
+	default:
+		return nil, fmt.Errorf("certificate request queue is full; retry later")
+	}
+	select {
+	case issuer <- struct{}{}:
+		return func() { <-issuer; <-pendingRequests }, nil
+	case <-ctx.Done():
+		<-pendingRequests
+		return nil, ctx.Err()
+	}
+}
+
+func issuanceTimeout() time.Duration { return config.ACMEDNSTimeout + 3*time.Minute }
+
+// IssueCertificate is retained for callers of the original API. It completes
+// any due renewal and refreshes exports before returning.
 func IssueCertificate(domain string) (tls.Certificate, error) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), issuanceTimeout())
+	defer cancel()
+	return IssueCertificateContext(ctx, domain)
+}
 
-	accountKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+// IssueCertificateContext is the synchronous CLI/export path. Unlike the TLS
+// callback it finishes any due renewal before a one-shot process can exit.
+func IssueCertificateContext(ctx context.Context, domain string) (tls.Certificate, error) {
+	domain, err := config.ValidateHostname(domain)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-
-	client := &acme.Client{
-		DirectoryURL: acme.LetsEncryptURL,
-		Key:          accountKey,
-	}
-
-	email := "mailto:" + normalizeDomainForEmail(domain) + "@" + config.Domain
-	acct := &acme.Account{Contact: []string{email}}
-	_, err = client.Register(ctx, acct, acme.AcceptTOS)
-	if err != nil && !strings.Contains(err.Error(), "already registered") {
-		return tls.Certificate{}, fmt.Errorf("register failed: %w", err)
-	}
-
-	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	release, err := acquireIssuer(ctx)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-
-	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(domain))
+	defer release()
+	cert, err := refreshLocked(ctx, domain)
 	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("authorize order: %w", err)
+		return tls.Certificate{}, err
 	}
-
-	var chal *acme.Challenge
-	var authURL string
-	for _, auth := range order.AuthzURLs {
-		authz, err := client.GetAuthorization(ctx, auth)
-		if err != nil {
+	if config.TLSMode == "local" {
+		if _, _, err := ensureLocalCA(); err != nil {
 			return tls.Certificate{}, err
 		}
-		for _, c := range authz.Challenges {
-			if c.Type == "dns-01" {
-				chal = c
-				authURL = authz.URI
-				break
-			}
-		}
 	}
-	if chal == nil {
-		return tls.Certificate{}, fmt.Errorf("no dns-01 challenge found")
-	}
-
-	token := chal.Token
-	dnsName := "_acme-challenge." + domain
-	dnsValue, err := client.DNS01ChallengeRecord(token)
-	if err != nil {
+	if err := saveCertificate(domain, cert); err != nil {
 		return tls.Certificate{}, err
 	}
-
-	txtstore.Set(dnsName, dnsValue, 60)
-	logger.Info("[letsencrypt] TXT record set for %s => %s", dnsName, dnsValue)
-
-	_, err = client.Accept(ctx, chal)
-	if err != nil {
-		txtstore.Delete(dnsName)
-		logger.Warn("[letsencrypt] ❌ Accept failed — TXT deleted for %s", dnsName)
-		return tls.Certificate{}, err
-	}
-
-	_, err = client.WaitAuthorization(ctx, authURL)
-	if err != nil {
-		txtstore.Delete(dnsName)
-		logger.Warn("[letsencrypt] ❌ Authorization failed — TXT deleted for %s", dnsName)
-		return tls.Certificate{}, err
-	}
-
-	txtstore.Delete(dnsName)
-	logger.Info("[letsencrypt] ✅ TXT record deleted for %s", dnsName)
-
-	csrBytes, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject:  pkix.Name{CommonName: domain},
-		DNSNames: []string{domain},
-	}, certKey)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	// Create cert
-	certDER, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csrBytes, true)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	logger.Info("[letsencrypt] 🔐 cert created for %s (%d bytes)", domain, len(certDER[0]))
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER[0]})
-	keyPEM, err := x509.MarshalPKCS8PrivateKey(certKey)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	keyPEMBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyPEM})
-
-	// Ensure directory exists
-	logger.Info("[letsencrypt] creating cache dir %s", cacheDir)
-	if err := os.MkdirAll(cacheDir, 0700); err != nil {
-		logger.Error("[letsencrypt] ❌ failed to create dir %s: %v", cacheDir, err)
-		return tls.Certificate{}, err
-	}
-
-	crtPath := filepath.Join(cacheDir, domain+".crt")
-	keyPath := filepath.Join(cacheDir, domain+".key")
-
-	if err := os.WriteFile(crtPath, certPEM, 0600); err != nil {
-		logger.Error("[letsencrypt] ❌ failed to write cert to %s: %v", crtPath, err)
-		return tls.Certificate{}, err
-	}
-	logger.Info("[letsencrypt] ✅ cert saved to %s", crtPath)
-
-	if err := os.WriteFile(keyPath, keyPEMBytes, 0600); err != nil {
-		logger.Error("[letsencrypt] ❌ failed to write key to %s: %v", keyPath, err)
-		return tls.Certificate{}, err
-	}
-	logger.Info("[letsencrypt] ✅ key saved to %s", keyPath)
-
-	return tls.X509KeyPair(certPEM, keyPEMBytes)
-}
-
-func HasCertificate(domain string) bool {
-	crt := filepath.Join(cacheDir, domain+".crt")
-	key := filepath.Join(cacheDir, domain+".key")
-	_, err1 := os.Stat(crt)
-	_, err2 := os.Stat(key)
-	if err1 != nil || err2 != nil {
-		return false
-	}
-
-	if !IsCertificateValid(domain) {
-		logger.Warn("[letsencrypt] certificate for %s is invalid or expired, reissuing...", domain)
-		_, err := IssueCertificate(domain)
-		if err != nil {
-			logger.Error("[letsencrypt] failed to reissue cert for %s: %v", domain, err)
-			return false
-		}
-	}
-
-	return true
-}
-
-func IsCertificateValid(domain string) bool {
-	certPath := filepath.Join(cacheDir, domain+".crt")
-	pemData, err := os.ReadFile(certPath)
-	if err != nil {
-		return false
-	}
-
-	block, _ := pem.Decode(pemData)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return false
-	}
-
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return false
-	}
-
-	now := time.Now()
-	return now.After(cert.NotBefore) && now.Before(cert.NotAfter)
-}
-
-func LoadCertificate(domain string) (tls.Certificate, error) {
-	crtPath := filepath.Join(cacheDir, domain+".crt")
-	keyPath := filepath.Join(cacheDir, domain+".key")
-
-	cert, err := tls.LoadX509KeyPair(crtPath, keyPath)
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("failed to load cert or key for %s: %w", domain, err)
-	}
-
 	return cert, nil
 }
 
-func normalizeDomainForEmail(domain string) string {
-	host := strings.Split(domain, ".")[0]
-	ipStr := strings.ReplaceAll(host, "-", ":")
-
-	if ip := net.ParseIP(ipStr); ip != nil {
-		if ip4 := ip.To4(); ip4 != nil {
-			return fmt.Sprintf("ip-%s-%s-%s-%s", ip4[0], ip4[1], ip4[2], ip4[3])
-		}
-		clean := strings.ReplaceAll(ip.String(), ":", "-")
-		return "ipv6-" + clean
+// refreshLocked requires the issuer token. It rechecks disk after waiting so
+// concurrent first handshakes share one certificate rather than many orders.
+func refreshLocked(ctx context.Context, domain string) (tls.Certificate, error) {
+	cached, loadErr := LoadCertificate(domain)
+	if loadErr == nil && !needsRenewal(cached, time.Now()) {
+		return cached, nil
 	}
+	key := cacheKey(domain)
+	failureMu.Lock()
+	previous := failures[key]
+	failureMu.Unlock()
+	if time.Now().Before(previous.until) {
+		return tls.Certificate{}, fmt.Errorf("certificate request cooling down: %w", previous.err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, issuanceTimeout())
+	defer cancel()
+	var cert tls.Certificate
+	var err error
+	switch config.TLSMode {
+	case "local":
+		cert, err = issueLocal(ctx, domain)
+	case "acme":
+		cert, err = issueACME(ctx, domain)
+	default:
+		err = fmt.Errorf("unsupported TLS mode %q", config.TLSMode)
+	}
+	if err == nil {
+		err = saveCertificate(domain, cert)
+	}
+	failureMu.Lock()
+	if err != nil && !errors.Is(err, context.Canceled) {
+		// Bound memory even when arbitrary hostnames are repeatedly requested.
+		if len(failures) >= 256 {
+			for k, v := range failures {
+				if !time.Now().Before(v.until) {
+					delete(failures, k)
+				}
+			}
+			if len(failures) >= 256 {
+				for k := range failures {
+					delete(failures, k)
+					break
+				}
+			}
+		}
+		failures[key] = failure{err: err, until: time.Now().Add(time.Minute)}
+	} else {
+		delete(failures, key)
+	}
+	failureMu.Unlock()
+	return cert, err
+}
 
-	clean := strings.ReplaceAll(domain, ".", "-")
-	return "domain-" + clean
+func needsRenewal(cert tls.Certificate, now time.Time) bool {
+	if cert.Leaf == nil {
+		return true
+	}
+	window := cert.Leaf.NotAfter.Sub(cert.Leaf.NotBefore) / 3
+	if window > 30*24*time.Hour {
+		window = 30 * 24 * time.Hour
+	}
+	return !now.Add(window).Before(cert.Leaf.NotAfter)
+}
+
+func HasCertificate(domain string) bool     { _, err := LoadCertificate(domain); return err == nil }
+func IsCertificateValid(domain string) bool { return HasCertificate(domain) }
+
+// RenewCached refreshes due certificates even if no client is currently using
+// them. Call periodically with the service lifetime context.
+func RenewCached(ctx context.Context) error {
+	if err := migrateLegacyCertificates(ctx); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(cacheDirectory())
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".pem") {
+			continue
+		}
+		domain := strings.TrimSuffix(entry.Name(), ".pem")
+		if _, err := config.ValidateHostname(domain); err != nil {
+			continue
+		}
+		if cert, err := LoadCertificate(domain); err == nil && !needsRenewal(cert, time.Now()) {
+			continue
+		}
+		select {
+		case issuer <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		_, err := refreshLocked(ctx, domain)
+		<-issuer
+		if err != nil {
+			logger.Warn("scheduled certificate renewal for %s: %v", domain, err)
+		}
+	}
+	return nil
 }

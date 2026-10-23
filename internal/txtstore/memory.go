@@ -2,17 +2,16 @@ package txtstore
 
 import (
 	"fmt"
-	"github.com/crypto-chiefs/dnsbox/internal/config"
-	"github.com/crypto-chiefs/dnsbox/internal/logger"
-	"github.com/crypto-chiefs/dnsbox/internal/utils"
-	"io"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/miekg/dns"
 )
 
-var missCache = sync.Map{} // fqdn → time.Time
+const MaxEntries = 4096
+const MaxTTL = 24 * 60 * 60
+const MaxValueBytes = 4096
 
 type entry struct {
 	value     string
@@ -24,111 +23,50 @@ var (
 	mu    sync.RWMutex
 )
 
-func Set(fqdn, value string, ttlSeconds int) {
+// Put stores a short-lived TXT record. Expired records are reclaimed on writes
+// and reads; there is no network access or unbounded negative lookup cache.
+func Put(fqdn, value string, ttlSeconds int) error {
 	fqdn = normalizeFQDN(fqdn)
-	logger.Info("[txtstore] Set(%s) = %s (ttl=%ds)", fqdn, value, ttlSeconds)
+	if _, ok := dns.IsDomainName(fqdn); !ok || fqdn == "." || len(fqdn) > 254 {
+		return fmt.Errorf("invalid TXT record name")
+	}
+	if value == "" || len(value) > MaxValueBytes || ttlSeconds <= 0 || ttlSeconds > MaxTTL {
+		return fmt.Errorf("invalid TXT value or lifetime")
+	}
+	now := time.Now()
 	mu.Lock()
 	defer mu.Unlock()
-	store[fqdn] = entry{
-		value:     value,
-		expiresAt: time.Now().Add(time.Duration(ttlSeconds) * time.Second),
-	}
-}
-
-func Get(fqdn string) (string, bool) {
-	val, ok := GetLocal(fqdn)
-	if ok {
-		return val, true
-	}
-	logger.Debug("[txtstore] GetLocal(%s) → false (val=%s)", fqdn, val)
-
-	if wasMissRecently(fqdn) {
-		logger.Debug("[txtstore] skipping lookup — recent miss for %s", fqdn)
-		return "", false
-	}
-
-	selfIP := config.IP
-
-	peers, err := utils.DiscoverPeers()
-	if err != nil {
-		markMiss(fqdn)
-		return "", false
-	}
-
-	for _, peer := range peers {
-		if peer.IP == selfIP {
-			continue
-		}
-		if val := queryPeerTXTOverHTTP(peer.IP, fqdn); val != "" {
-			Set(fqdn, val, 30)
-			return val, true
+	for name, e := range store {
+		if !now.Before(e.expiresAt) {
+			delete(store, name)
 		}
 	}
-
-	markMiss(fqdn)
-	return "", false
+	if _, exists := store[fqdn]; !exists && len(store) >= MaxEntries {
+		return fmt.Errorf("TXT record store is full")
+	}
+	store[fqdn] = entry{value: value, expiresAt: now.Add(time.Duration(ttlSeconds) * time.Second)}
+	return nil
 }
 
+func Set(fqdn, value string, ttlSeconds int) { _ = Put(fqdn, value, ttlSeconds) }
+func Get(fqdn string) (string, bool)         { return GetLocal(fqdn) }
 func GetLocal(fqdn string) (string, bool) {
 	fqdn = normalizeFQDN(fqdn)
-	mu.RLock()
-	defer mu.RUnlock()
-
-	e, ok := store[fqdn]
-	if !ok || time.Now().After(e.expiresAt) {
-		return "", false
-	}
-
-	return e.value, true
-}
-
-func Delete(fqdn string) {
-	fqdn = normalizeFQDN(fqdn)
-	logger.Info("[txtstore] Delete(%s)", fqdn)
 	mu.Lock()
 	defer mu.Unlock()
-	delete(store, fqdn)
-}
-
-func queryPeerTXTOverHTTP(peer, fqdn string) string {
-	url := fmt.Sprintf("http://%s/.dnsbox/txt/%s", peer, fqdn)
-
-	client := &http.Client{
-		Timeout: 2 * time.Second, // можно поднять до 3-5 сек при необходимости
+	e, ok := store[fqdn]
+	if !ok {
+		return "", false
 	}
-
-	resp, err := client.Get(url)
-	if err != nil {
-		logger.Warn("[query] TXT HTTP failed for %s via %s: %v", fqdn, peer, err)
-		return ""
+	if !time.Now().Before(e.expiresAt) {
+		delete(store, fqdn)
+		return "", false
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		logger.Warn("[query] TXT HTTP response %d for %s via %s", resp.StatusCode, fqdn, peer)
-		return ""
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		logger.Warn("[query] TXT HTTP read failed for %s via %s: %v", fqdn, peer, err)
-		return ""
-	}
-
-	return string(body)
+	return e.value, true
 }
-
-func wasMissRecently(fqdn string) bool {
-	if ts, ok := missCache.Load(fqdn); ok {
-		return time.Since(ts.(time.Time)) < 30*time.Second
-	}
-	return false
+func Delete(fqdn string) {
+	mu.Lock()
+	defer mu.Unlock()
+	delete(store, normalizeFQDN(fqdn))
 }
-
-func markMiss(fqdn string) {
-	missCache.Store(fqdn, time.Now())
-}
-
-func normalizeFQDN(fqdn string) string {
-	return strings.TrimSuffix(fqdn, ".")
-}
+func normalizeFQDN(fqdn string) string { return dns.Fqdn(strings.ToLower(strings.TrimSpace(fqdn))) }

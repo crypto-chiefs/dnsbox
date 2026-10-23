@@ -1,66 +1,36 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-SERVICE_NAME="dnsbox"
-INSTALL_DIR="$HOME/.dnsbox"
-BIN_NAME="dnsboxd"
-SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
+INSTALL_DIR="${HOME:?HOME must be set}/.dnsbox"
+REMOVE_SERVICE=auto
+for arg in "$@"; do
+  case "$arg" in
+    --install-dir=*) INSTALL_DIR=${arg#*=} ;;
+    --no-systemd) REMOVE_SERVICE=no ;;
+    --help|-h)
+      printf 'Usage: bash uninstall.sh [--install-dir=PATH] [--no-systemd]\nRemoves the binary and matching service. Preserves configuration, certificates, CA, and logs.\n'
+      exit 0 ;;
+    *) printf 'Unknown option: %s\n' "$arg" >&2; exit 1 ;;
+  esac
+done
+[[ "$INSTALL_DIR" = /* && "$INSTALL_DIR" != / ]] || { printf 'Invalid installation directory\n' >&2; exit 1; }
 
-# Detect sudo or root
-if [[ $EUID -eq 0 ]]; then
-  SUDO=""
-else
-  SUDO="sudo"
+SERVICE_FILE=/etc/systemd/system/dnsbox.service
+matches_service() {
+  # Accept both the current launcher and the legacy installer's direct binary.
+  grep -Fxq -e "ExecStart=\"$INSTALL_DIR/run-dnsbox\"" \
+    -e "ExecStart=$INSTALL_DIR/dnsboxd" \
+    -e "ExecStart=\"$INSTALL_DIR/dnsboxd\"" "$SERVICE_FILE"
+}
+if [[ "$REMOVE_SERVICE" != no && -f "$SERVICE_FILE" ]] && matches_service; then
+  SUDO=()
+  if [[ $EUID -ne 0 ]]; then SUDO=(sudo); fi
+  "${SUDO[@]}" systemctl disable --now dnsbox.service
+  "${SUDO[@]}" rm -f -- "$SERVICE_FILE"
+  "${SUDO[@]}" systemctl daemon-reload
 fi
 
-echo "🧹 Removing DNSBox..."
-
-# Stop and disable the systemd service
-if systemctl list-units --type=service | grep -q "$SERVICE_NAME"; then
-  echo "🛑 Stopping systemd service..."
-  $SUDO systemctl stop $SERVICE_NAME || true
-  $SUDO systemctl disable $SERVICE_NAME || true
-  $SUDO rm -f "$SERVICE_FILE"
-  $SUDO systemctl daemon-reload
-  echo "✅ Systemd service removed."
-else
-  echo "ℹ️ Service not found — skipping."
-fi
-
-# Remove binary and working directory
-if [[ -d "$INSTALL_DIR" ]]; then
-  echo "🗑️ Removing installation directory: $INSTALL_DIR..."
-  rm -rf "$INSTALL_DIR"
-  echo "✅ Directory deleted: $INSTALL_DIR"
-else
-  echo "ℹ️ Installation directory not found — skipping."
-fi
-
-# Delete journald logs for this specific service
-echo "🧼 Cleaning up journald logs for $SERVICE_NAME..."
-$SUDO journalctl --quiet --rotate
-$SUDO journalctl --quiet --flush
-$SUDO journalctl --quiet --vacuum-time=1s
-
-# Wipe persistent journal logs that contain the service name
-LOG_PATH="/var/log/journal"
-if [[ -d "$LOG_PATH" ]]; then
-  $SUDO find "$LOG_PATH" -type f -exec grep -l "$SERVICE_NAME" {} + | while read -r file; do
-    echo "🧨 Truncating log file: $file"
-    $SUDO truncate -s 0 "$file"
-  done
-fi
-
-# Clear journald runtime cache and restart daemon
-echo "♻️ Restarting systemd-journald and clearing runtime cache..."
-$SUDO systemctl restart systemd-journald
-$SUDO rm -rf /run/log/journal/*
-echo "✅ Journald restarted and cache cleared."
-
-# Extra cleanup: release deleted-but-open files (e.g., syslog)
-echo "♻️ Restarting rsyslog to release deleted log files..."
-$SUDO systemctl restart rsyslog
-echo "✅ rsyslog restarted."
-
-# Final message
-echo -e "\033[1;32m✅ DNSBox has been fully uninstalled. All related logs and cache have been cleaned.\033[0m"
+# Remove only known executable files, never recurse through user data.
+rm -f -- "$INSTALL_DIR/dnsboxd" "$INSTALL_DIR/dnsboxd.new" "$INSTALL_DIR/run-dnsbox"
+printf 'DNSBox executables removed. Configuration, certificates, CA, and system logs were preserved.\n'
+printf 'Preserved installation directory: %s\n' "$INSTALL_DIR"
